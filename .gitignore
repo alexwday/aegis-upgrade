@@ -1,0 +1,30 @@
+.DS_Store
+Thumbs.db
+
+# Local secrets and machine-specific config.
+.env
+*.env
+!*.env.example
+aegis-agent/.env
+aegis-pipeline/sources/*/database/.env
+
+# Python environments and caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated pipeline/runtime artifacts.
+aegis-pipeline/sources/*/data-output/
+aegis-pipeline/sources/*/progress/
+aegis-pipeline/sources/*/logs/
+aegis-pipeline/sources/*/tokenizer-cache/
+aegis-agent/logs/
+
+# Local editor/app state.
+.idea/
+.vscode/

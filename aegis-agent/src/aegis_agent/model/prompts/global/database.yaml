@@ -1,0 +1,225 @@
+name: database
+version: "1.0.0"
+last_updated: "2025-01-22"
+
+databases:
+  - id: transcripts
+    name: Earnings Transcripts Database
+    content: |
+      Data Contains:
+      Earnings call transcripts from all global banks and insurance companies in scope. Contains 
+      complete transcripts including prepared management remarks and Q&A sessions with analysts.
+      Used to provide context, management discussion, logic/reasoning/explanation around financial 
+      results. While it contains some key line items mentioned during calls, it is primarily meant 
+      to capture management discussion and guidance and provide context around the numbers.
+      
+      WHEN TO USE:
+      ✓ Pure management commentary/discussion ("What did management say about...")
+      ✓ Forward guidance and outlook
+      ✓ Explanations and reasoning behind numbers
+      ✓ Strategic discussions and initiatives
+      ✓ Q&A with analysts
+      ✓ When questions include "said", "explained", "discussed", "mentioned", "thoughts on"
+      
+      DO NOT USE FOR:
+      ✗ Pure line item queries without commentary (use supplementary+RTS instead)
+      ✗ Financial metrics alone (use supplementary+RTS)
+      ✗ Report to shareholders content (use RTS)
+      ✗ Pre-generated reports (use reports database)
+      
+      Query Requirements:
+      - Fiscal Year (e.g., FY2024, FY2025)
+      - Quarter (e.g., Q1, Q2, Q3, Q4) OR multiple periods
+      - Bank(s) (e.g., RBC, TD, BMO, Scotia, CIBC, or "all peers")
+      
+      Example Queries:
+      - "What did RBC management say about digital transformation?" (transcripts ONLY)
+      - "How did the CEO explain the margin compression?" (transcripts for commentary)
+      - "What guidance was provided for 2025?" (transcripts ONLY)
+      
+      Institution Coverage:
+      Available for: All global banks and insurance companies in scope
+
+  - id: supplementary
+    name: Supplementary Information Database
+    content: |
+      Data Contains:
+      Income statement, balance sheet, and business-specific line items from all major Canadian 
+      and US banks in scope. This is the primary source of line items, amounts, and historical 
+      financial data. Contains standardized financial metrics to enable direct comparisons across 
+      institutions.
+      
+      WHEN TO USE:
+      ✓ ANY financial line item query (net income, revenue, NIM, ROE, efficiency ratio, etc.)
+      ✓ Peer comparisons and rankings
+      ✓ Trend analysis of metrics
+      ✓ Segment/platform performance data
+      ✓ ALWAYS pair with RTS for comprehensive line item coverage
+      ✓ Regulatory metrics (CET1, RWA, leverage ratios)
+      
+      DO NOT USE FOR:
+      ✗ Pure management commentary (use transcripts instead)
+      ✗ Standalone without RTS for line items (always use BOTH)
+      ✗ 10-Q/10-K document content (use RTS)
+      ✗ Pre-generated analysis reports (use reports database)
+      
+      CRITICAL RULE:
+      ⚠️ ALWAYS use supplementary AND rts TOGETHER for line item queries
+      ⚠️ NEVER use supplementary alone for line items
+      
+      Query Requirements:
+      - Fiscal Year (e.g., FY2024, FY2025)
+      - Quarter (e.g., Q1, Q2, Q3, Q4) OR multiple periods
+      - Bank(s) (e.g., RBC, TD, BMO, Scotia, CIBC, or "peer average")
+      
+      Example Queries:
+      - "What's the efficiency ratio?" (use supplementary + RTS)
+      - "Show NIM trends" (use supplementary + RTS)
+      - "Compare net income across banks" (use supplementary + RTS)
+      
+      Institution Coverage:
+      Available for: All major Canadian and US banks in scope
+
+  - id: supplementary_financials
+    name: Supplementary Financials Database
+    content: |
+      Data Contains:
+      Placeholder supplementary financials agent for the new database buildout. This is currently
+      used to test routing and streaming before the actual retriever and research logic are built.
+
+      WHEN TO USE:
+      ✓ When the user explicitly selects Supplementary Financials in the interface
+      ✓ Testing the new supplementary_financials subagent path
+      ✓ Future supplementary financial package retrieval and research workflows
+
+      DO NOT USE FOR:
+      ✗ IR benchmarking output from the existing supplementary subagent
+      ✗ Management commentary (use transcripts instead)
+      ✗ Report to shareholders or 10-Q/10-K document content (use RTS)
+
+      Query Requirements:
+      - Fiscal Year (e.g., FY2024, FY2025)
+      - Quarter (e.g., Q1, Q2, Q3, Q4)
+      - Bank(s) (e.g., RBC, TD, BMO, Scotia, CIBC)
+
+      Institution Coverage:
+      Placeholder coverage while the actual retriever is being built
+
+  - id: pillar3
+    name: Pillar 3 Regulatory Database
+    content: |
+      Data Contains:
+      Quarterly Pillar 3 reporting from Canadian banks. Contains Basel III regulatory disclosures
+      including detailed capital adequacy metrics, risk-weighted assets by category, leverage
+      ratios, liquidity coverage ratios (LCR), net stable funding ratios (NSFR), and other
+      regulatory compliance metrics required by OSFI.
+
+      WHEN TO USE:
+      ✓ CET1, Tier 1, Total Capital ratios
+      ✓ Risk-weighted assets (RWA) details
+      ✓ Leverage ratios
+      ✓ Liquidity metrics (LCR, NSFR)
+      ✓ Basel III regulatory metrics
+      ✓ Regulatory capital disclosures
+
+      DO NOT USE FOR:
+      ✗ Non-regulatory metrics (use supplementary+RTS)
+      ✗ Management commentary (use transcripts)
+      ✗ US banks (Canadian banks only)
+      ✗ General financial metrics (use supplementary+RTS)
+
+      Query Requirements:
+      - Fiscal Year (e.g., FY2024, FY2025)
+      - Quarter (e.g., Q1, Q2, Q3, Q4)
+      - Bank(s) (e.g., RBC, TD, BMO, Scotia, CIBC)
+
+      Example Queries:
+      - "What is RBC's detailed CET1 composition?" (use pillar3)
+      - "Show regulatory capital breakdown" (use pillar3)
+      - "LCR and NSFR trends" (use pillar3)
+
+      Institution Coverage:
+      Available for: Canadian banks only
+
+  - id: reports
+    name: Pre-Generated Reports Database
+    content: |
+      Data Contains:
+      ONLY the following specific pre-generated reports (no other data):
+      1. Transcript Call Summaries - Pre-computed earnings call summaries
+      2. Transcript Key Themes - Pre-identified key themes from earnings calls
+      3. Transcripts CM Readthrough - Capital Markets division analysis reports
+      4. Transcripts WM Readthrough - Wealth Management division analysis reports
+      5. RTS Blackline - Report to Shareholders change comparison reports
+      
+      WHEN TO USE:
+      ✓ ONLY when user explicitly requests one of the above reports BY NAME
+      ✓ "transcript call summary" or "call summary"
+      ✓ "key themes" (as a report name)
+      ✓ "CM readthrough" or "Capital Markets readthrough"
+      ✓ "WM readthrough" or "Wealth Management readthrough"
+      ✓ "RTS blackline" or "blackline comparison"
+      
+      DO NOT USE FOR:
+      ✗ "report to shareholders" (use RTS - completely different!)
+      ✗ "10-Q" or "10-K" reports (use RTS)
+      ✗ Any line item queries (use supplementary+RTS)
+      ✗ Management commentary queries (use transcripts)
+      ✗ General earnings information (use appropriate database)
+      ✗ ANY query that doesn't explicitly name one of the 5 reports above
+      
+      CRITICAL:
+      ⚠️ This is ONLY for pre-generated analysis reports
+      ⚠️ NOT for source documents like "report to shareholders"
+      ⚠️ User must explicitly request the report BY NAME
+      
+      Query Requirements:
+      - Specific report name from the list above
+      - Fiscal Year (e.g., FY2024, FY2025)
+      - Quarter (e.g., Q1, Q2, Q3, Q4)
+      - Bank(s) (e.g., RBC, TD, BMO, Scotia, CIBC)
+      
+      Institution Coverage:
+      Available for: Banks with pre-generated reports in the system
+
+  - id: rts
+    name: Report to Shareholders Database
+    content: |
+      Data Contains:
+      Report to Shareholders for Canadian banks and 10-Q (quarterly) / 10-K (annual) filings from US banks. 
+      This is the ONLY database containing 10-Q and 10-K reports. Contains comprehensive financial 
+      statements, MD&A, business segment analysis at platform level, and regulatory disclosures. 
+      Provides both narrative sections and tabular financial data in the format required by each jurisdiction.
+      
+      WHEN TO USE:
+      ✓ ALWAYS for ANY line item query (paired with supplementary)
+      ✓ When user specifically asks for "report to shareholders"
+      ✓ 10-Q or 10-K filings (EXCLUSIVE to RTS)
+      ✓ Quarterly/annual report documents
+      ✓ Segment/platform performance data
+      ✓ Official filed financial statements
+      
+      DO NOT USE FOR:
+      ✗ Pure management commentary without line items (use transcripts)
+      ✗ Pre-generated analysis reports (use reports database)
+      ✗ Standalone without supplementary for line items
+      
+      CRITICAL RULES:
+      ⚠️ For line items: ALWAYS use supplementary AND rts TOGETHER
+      ⚠️ For "report to shareholders"/"10-Q"/"10-K": use RTS ONLY
+      ⚠️ This is the ONLY source for 10-Q/10-K documents
+      ⚠️ Do NOT confuse with "reports" database (completely different)
+      
+      Query Requirements:
+      - Fiscal Year (e.g., FY2024, FY2025)
+      - Quarter (e.g., Q1, Q2, Q3, Q4) OR Annual
+      - Bank(s) (e.g., RBC, TD, BMO, Scotia, CIBC, JPM, BAC, WFC)
+      
+      Example Queries:
+      - "What's the net income?" (use supplementary + RTS)
+      - "Get the report to shareholders" (use RTS only)
+      - "Show JPMorgan's 10-Q" (use RTS only)
+      - "Segment revenue breakdown" (use supplementary + RTS)
+      
+      Institution Coverage:
+      Available for: Canadian banks and US banks in scope

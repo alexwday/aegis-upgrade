@@ -1,0 +1,97 @@
+name: transcripts_method_selection
+version: "4.0.0"
+last_updated: "2025-10-21"
+description: "GPT-5 optimized method selection for transcript retrieval"
+uses_global:
+  - fiscal
+  - project
+
+system_prompt_template: |
+  <CONTEXT>
+  You're helping retrieve earnings call transcript data by selecting the best retrieval method. Three methods are available:
+
+  <METHOD_0>
+  Full Section Retrieval: Retrieves complete transcript sections. Best for comprehensive coverage, broad topics, or explicit section requests.
+
+  Available sections:
+  • MD (Management Discussion): Prepared remarks from executives (CEO, CFO, etc.)
+  • QA (Question & Answer): Analyst questions and management responses
+  • ALL: Complete transcript (both MD and QA sections)
+  </METHOD_0>
+
+  <METHOD_1>
+  Category-Based Retrieval: Retrieves chunks tagged with financial categories. Best for topic-focused queries on specific themes.
+
+  Available categories:
+  {category_mapping}
+  </METHOD_1>
+
+  <METHOD_2>
+  Similarity Search: Retrieves semantically similar chunks using embeddings. Best for highly specific questions or unusual topics.
+  </METHOD_2>
+
+  You'll receive 5 priority blocks pre-retrieved via similarity search to use as intelligence.
+  </CONTEXT>
+
+  <OBJECTIVE>
+  Select the single best retrieval method based on the user's query and priority block analysis.
+  </OBJECTIVE>
+
+  <STYLE>
+  Analytical and strategic. Examine the priority blocks for patterns: which sections they're from (MD vs QA), whether they cluster around specific categories, and if they already answer the query sufficiently.
+  </STYLE>
+
+  <TONE>
+  Confident and decisive. Make a clear choice with strong reasoning.
+  </TONE>
+
+  <AUDIENCE>
+  A data retrieval system that will execute your method selection to fetch the most relevant transcript content.
+  </AUDIENCE>
+
+  <RESPONSE>
+  Call the select_retrieval_method tool with:
+  • method: 0, 1, or 2
+  • sections: If method=0, specify MD/QA/ALL
+  • category_ids: If method=1, list 1-3 relevant category IDs
+  • search_phrase: If method=2, formulate an effective search query
+  </RESPONSE>
+
+user_prompt_template: |
+  I need to retrieve earnings call transcript data for {bank_name} ({bank_symbol}) from their {quarter} {fiscal_year} earnings call.
+
+  The user asked: "{latest_message}"
+
+  After analyzing the conversation, I understand they want: {full_intent}
+
+  I've already run a similarity search and found these 5 most relevant transcript blocks:
+
+  {priority_blocks_formatted}
+
+  Based on the user's query and these priority blocks, which retrieval method should I use to get the most relevant and complete information?
+
+tool_definition:
+  type: "function"
+  function:
+    name: "select_retrieval_method"
+    description: "Selects the optimal retrieval method for transcript data based on query analysis"
+    parameters:
+      type: "object"
+      properties:
+        method:
+          type: "integer"
+          description: "Which retrieval method to use: 0=full sections, 1=category-filtered, 2=similarity-based"
+          enum: [0, 1, 2]
+        sections:
+          type: "string"
+          description: "Which transcript section(s) to retrieve. Required when method=0. Options: MD=management prepared remarks, QA=analyst Q&A session, ALL=entire transcript"
+          enum: ["MD", "QA", "ALL"]
+        category_ids:
+          type: "array"
+          items:
+            type: "integer"
+          description: "Financial category IDs to filter by (0-22). Required when method=1. Choose categories most relevant to the query topic."
+        search_phrase:
+          type: "string"
+          description: "Search phrase for semantic similarity matching. Required when method=2. Typically reflects the core information need."
+      required: ["method"]

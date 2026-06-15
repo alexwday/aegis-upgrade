@@ -1,0 +1,121 @@
+stage: section_summary
+version: "2.0"
+description: >
+  Generate source-grounded section summaries and refined retrieval terms from
+  per-unit keyword and metric extractions.
+
+system_prompt: >
+  You are a source-grounded summarization agent for bank earnings transcripts.
+  Summarize only the supplied transcript section content and metadata. Always
+  use the provided tool.
+
+user_prompt: >
+  Summarize each section and refine its retrieval keywords and metrics from the
+  per-unit extractions. Every <section> id in the input must appear exactly
+  once in the output.
+
+  Success criteria:
+
+  1. Write a self-contained 2-4 sentence summary for each section. Identify the
+     section's subject, the transcript unit type when useful (management
+     discussion speaker block or Q&A exchange), and the most
+     retrieval-relevant visible facts.
+
+  2. For management discussion, summarize the prepared-remarks topic,
+     relevant speaker, visible metric labels, segment/product/geography labels,
+     and notable values. Preserve uncertainty markers such as ~, approx.,
+     ranges, bps, %, $, parentheses, and signs.
+
+  3. For Q&A, summarize the analyst question topic, management answer, speaker
+     names when visible, and any explicit metric values or qualitative
+     statements that help retrieval.
+
+  4. Do not infer trends, management conclusions, missing numbers, or causal
+     explanations unless the section text explicitly says them. Summaries must
+     distinguish visible facts from uncertainty in the source content.
+
+  5. Refine keywords by selecting the 10-15 most representative and
+     distinguishing terms from the per-unit keywords and section content.
+     Fewer are acceptable for sparse sections.
+
+  6. Deduplicate metrics across units within the section. Metrics remain
+     canonical labels, not observations. Preserve exactly "Metric Name" or
+     "Metric Name | Segment: Segment Name"; do not add periods, dates, or
+     numeric values to metrics.
+
+  7. Use document context and the table of contents only for orientation. Do
+     not copy unrelated section content or repeat generic boilerplate when a
+     section is sparse.
+
+  8. If a section's content is sparse or unclear, still include it with a
+     best-effort source-grounded summary and whatever keywords and metrics are
+     visible. Empty keyword and metric arrays are acceptable.
+
+  Sections:
+
+  {user_input}
+
+tool_choice: required
+
+tools:
+  - type: function
+    function:
+      name: summarize_section
+      description: >
+        Return one summary item for every supplied section. Each item must copy
+        the input section id verbatim, provide a source-grounded 2-4 sentence
+        summary, and include refined keywords and canonical metric labels.
+      parameters:
+        type: object
+        properties:
+          items:
+            type: array
+            items:
+              type: object
+              properties:
+                section_id:
+                  type: string
+                  description: >
+                    The section identifier copied verbatim from the input
+                    <section id="..."> attribute. Each input section_id must
+                    appear exactly once across the items array.
+                summary:
+                  type: string
+                  description: >
+                    2-4 sentence source-grounded section summary focused on
+                    visible financial content, chart/table purpose, notable
+                    values, and retrieval-relevant context.
+                keywords:
+                  type: array
+                  items:
+                    type: string
+                  description: >
+                    10-15 refined retrieval terms for the section where
+                    available, distilled from per-unit keywords and visible
+                    section content.
+                metrics:
+                  type: array
+                  items:
+                    type: string
+                  description: >
+                    Refined financial metric labels for the section,
+                    deduplicated across units. Preserve "Metric Name" or
+                    "Metric Name | Segment: Segment Name"; do not include
+                    numeric values, dates, or periods.
+              required:
+                - section_id
+                - summary
+                - keywords
+                - metrics
+              additionalProperties: false
+            description: >
+              Summary and refined retrieval metadata for each section. The
+              array length must equal the number of input sections.
+          rationale:
+            type: string
+            description: >
+              Brief note on summarization and sparse-section handling.
+        required:
+          - items
+          - rationale
+        additionalProperties: false

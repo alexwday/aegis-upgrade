@@ -1,0 +1,47 @@
+# One-venv workstation install for the root Aegis upgrade workspace.
+# Source-specific requirements are left intact under each component folder.
+
+# App framework
+fastapi==0.115.0
+Flask==3.1.0
+uvicorn[standard]==0.32.0
+websockets==13.1
+
+# LLM and HTTP
+openai==2.36.0
+httpx==0.28.1
+requests==2.34.1
+
+# Database
+asyncpg==0.30.0
+psycopg2-binary==2.9.12
+SQLAlchemy==2.0.36
+
+# Data/document processing
+pandas==2.2.3
+openpyxl==3.1.5
+Pillow==12.0.0
+PyMuPDF==1.26.7
+pydantic==2.11.7
+tiktoken==0.12.0
+
+# Document/report generation
+Jinja2==3.1.6
+python-docx==1.2.0
+reportlab==4.4.3
+
+# Config, logging, auth
+python-dotenv==1.1.1
+structlog==25.4.0
+PyYAML==6.0.3
+pysmb
+
+# Local validation
+black==25.1.0
+coverage==7.10.4
+flake8==7.3.0
+isort==6.0.1
+pylint==3.3.8
+pytest==8.4.1
+pytest-asyncio==0.24.0
+pytest-cov==6.2.1

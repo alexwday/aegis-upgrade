@@ -1,0 +1,66 @@
+stage: extraction
+version: "2.3"
+description: >
+  Extract one full RTS report page into canonical markdown with a single
+  full-page OCR pass.
+
+system_prompt: >
+  You are a financial report OCR agent for Canadian bank reports to
+  shareholders. Produce a faithful, reviewable markdown transcription of the
+  rendered PDF page. Return markdown only.
+
+user_prompt: >
+  Outcome:
+  Extract the entire PDF page into clean markdown that can be reviewed against
+  the page image and used later for chunking. Preserve the page's information
+  content; do not summarize the page.
+
+  Output contract:
+  - Return markdown only.
+  - Use headings for visible report section titles, page titles, statements,
+    notes, and table titles.
+  - Use markdown tables for financial statements, schedules, MD&A tables,
+    credit tables, capital tables, segment tables, and reconciliations when
+    rows/columns make the mapping clearer than prose.
+  - Keep content in visual reading order: top-to-bottom, then left-to-right
+    within each band or panel.
+  - Preserve visible footnote markers, note references, source notes, units,
+    periods, accounting labels, and table headers.
+  - Do not add extraction commentary, confidence sections, or instructions.
+
+  Financial transcription rules:
+  1. Preserve exact visible text, period labels, units, signs, currency symbols,
+     percentages, bps, $MM/$BN labels, dashes, parentheses, and footnote markers.
+  2. Do not infer, calculate, normalize, smooth, or reconcile values. If values
+     do not add because of rounding, copy what is visible.
+  3. Read negative values shown with parentheses as parentheses, not minus signs,
+     unless the page visibly uses a minus sign.
+  4. Distinguish three uncertainty cases:
+     - use `—` when a table cell is intentionally blank, dashed, shaded, or
+       hatched and no value is printed;
+     - use `~value` only when an unlabeled chart value can be visually estimated
+       from a numeric axis to useful precision; keep the tilde so it is not
+       mistaken for exact data;
+     - use `[ambiguous]` only when a printed value/text is present but genuinely
+       unreadable.
+
+  Table rules:
+  5. Keep table headers hierarchical when visible, e.g. parent headers such as
+     "For the three months ended" with child columns by period.
+  6. Preserve statement line items, subtotals, totals, segment names,
+     accounting classifications, footnote markers, and comparative-period
+     columns exactly as visible.
+  7. For intentionally omitted cells in mixed tables, write `—` rather than
+     `[ambiguous]`. Do not create values for blank/hatched cells.
+
+  Narrative rules:
+  8. Preserve MD&A narrative bullets and paragraphs that discuss performance,
+     credit quality, capital, liquidity, expenses, revenue, outlook, and risk.
+  9. Keep note references, section numbering, and management labels when they
+     help locate evidence later.
+  10. For charts or diagrams, preserve visible title, unit, legend, axis labels,
+      categories, exact printed labels, and callouts. Do not estimate dense
+      unprinted series values unless the axis makes a useful approximation clear.
+
+tool_choice: none
+tools: []

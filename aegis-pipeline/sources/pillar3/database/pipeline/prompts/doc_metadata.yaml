@@ -1,0 +1,145 @@
+stage: doc_metadata
+version: "1.0"
+description: >
+  Extract document metadata, detect table of contents, and
+  classify document structure type from initial page content.
+
+system_prompt: >
+  You are a document analysis agent for financial and
+  corporate documents. Extract metadata from the provided
+  document content, detect any table of contents, and
+  classify how the document is structurally organized.
+  Always use the provided tool.
+
+user_prompt: >
+  Analyze the document content below and extract metadata
+  fields including title, authors, publication date,
+  language, structure type, and table of contents.
+
+
+  {user_input}
+
+
+  Rules:
+
+  1. Extract the title from the cover page or first heading.
+     Use the most prominent heading, not a subtitle or
+     tagline.
+
+  2. Identify structure_type based on how content is
+     organized: use sheet_based for spreadsheet files where
+     each worksheet tab is a section, chapters for documents
+     with major numbered or named divisions, sections for
+     numbered hierarchies (1.1, 1.2, etc.), topic_based for
+     topic shifts without formal numbering, and semantic when
+     no structure is identifiable.
+
+  3. Set has_toc to true only when a formal table of contents
+     page or section exists. Populate toc_entries with every
+     listed entry in document order.
+
+  4. Use ISO 8601 format (YYYY-MM-DD) for publication_date.
+     Return an empty string when no date is found.
+
+  5. Return an empty string for authors when no author or
+     publishing organization is identifiable.
+
+  6. Set language to the ISO 639-1 code of the primary
+     language used in the document content.
+
+  7. Provide a brief rationale explaining the structure_type
+     decision, referencing specific evidence from the content.
+
+tool_choice: required
+
+tools:
+  - type: function
+    function:
+      name: extract_document_metadata
+      description: >
+        Call this tool when you have analyzed the document
+        content and are ready to report metadata, structure
+        classification, and table of contents. Returns the
+        complete document metadata including title, authors,
+        publication date, language, structure type, TOC
+        presence, TOC entries, and a rationale for the
+        structure decision.
+      parameters:
+        type: object
+        properties:
+          title:
+            type: string
+            description: >
+              Document title from the cover page or first
+              page heading.
+          authors:
+            type: string
+            description: >
+              Authors or publishing organization. Empty
+              string if not found.
+          publication_date:
+            type: string
+            description: >
+              Publication date in ISO 8601 format
+              (YYYY-MM-DD). Empty string if not found.
+          language:
+            type: string
+            description: >
+              Primary language as ISO 639-1 code
+              (e.g. "en", "fr").
+          structure_type:
+            type: string
+            enum:
+              - sheet_based
+              - chapters
+              - sections
+              - topic_based
+              - semantic
+            description: >
+              How the document is organized. Choose
+              sheet_based for XLSX files where each worksheet
+              is a section. Choose chapters for documents with
+              clear major divisions. Choose sections for
+              numbered hierarchies. Choose topic_based for
+              topic shifts without numbering. Choose semantic
+              when no structure is identifiable.
+          has_toc:
+            type: boolean
+            description: >
+              Whether a formal table of contents was found in
+              the document.
+          toc_entries:
+            type: array
+            items:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: >
+                    Title or label of the TOC entry.
+                page_number:
+                  type: integer
+                  description: >
+                    Page number referenced by the TOC entry.
+              required:
+                - name
+                - page_number
+              additionalProperties: false
+            description: >
+              Table of contents entries in document order.
+              Return empty array when no TOC exists.
+          rationale:
+            type: string
+            description: >
+              Brief explanation of the structure_type
+              decision. Used for pipeline traceability.
+        required:
+          - title
+          - authors
+          - publication_date
+          - language
+          - structure_type
+          - has_toc
+          - toc_entries
+          - rationale
+        additionalProperties: false
