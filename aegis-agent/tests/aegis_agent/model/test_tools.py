@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from aegis_agent.model.agents.tools import dispatch_tool_call, is_research_scope_complete
+from aegis_agent.model.agents.schemas import DEFAULT_DOCUMENT_SOURCES, ResearchRequest
 
 
 def _tool_call(name: str, arguments: str) -> dict:
@@ -16,6 +17,22 @@ def test_incomplete_research_scope_is_not_complete() -> None:
     assert not is_research_scope_complete(
         {"question": "credit quality", "combinations": [{"bank_symbol": "RY-CA"}]}
     )
+
+
+def test_research_request_default_sources_include_transcript_sources() -> None:
+    """An omitted sources list should resolve to the full six-source default."""
+    request = ResearchRequest.model_validate(
+        {
+            "question": "earnings performance",
+            "combinations": [
+                {"bank_symbol": "RY-CA", "fiscal_year": 2026, "quarter": "Q1"}
+            ],
+        }
+    )
+
+    assert request.sources == DEFAULT_DOCUMENT_SOURCES
+    assert "transcripts" in request.sources
+    assert "event_transcripts" in request.sources
 
 
 @pytest.mark.asyncio
@@ -38,6 +55,31 @@ async def test_dispatch_does_not_run_research_before_scope_is_clear(monkeypatch)
 
     assert result["status"] == "needs_clarification"
     assert not called
+
+
+@pytest.mark.asyncio
+async def test_dispatch_applies_context_source_filter(monkeypatch) -> None:
+    """A user-selected source filter should override model-supplied sources."""
+    captured_arguments = {}
+
+    async def fake_run_research_tool(arguments, *_args, **_kwargs):
+        captured_arguments.update(arguments)
+        return {"status": "success"}
+
+    monkeypatch.setattr("aegis_agent.model.agents.tools.run_research_tool", fake_run_research_tool)
+    result = await dispatch_tool_call(
+        _tool_call(
+            "run_research",
+            (
+                '{"question":"credit quality","sources":["investor_slides","rts"],'
+                '"combinations":[{"bank_symbol":"RY-CA","fiscal_year":2026,"quarter":"Q1"}]}'
+            ),
+        ),
+        context={"execution_id": "test", "source_filter": ["transcripts"]},
+    )
+
+    assert result["status"] == "success"
+    assert captured_arguments["sources"] == ["transcripts"]
 
 
 @pytest.mark.asyncio

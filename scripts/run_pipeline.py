@@ -8,16 +8,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from retrieval_source_config import PIPELINE_ROOT, source_keys
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PIPELINE_ROOT = PROJECT_ROOT / "aegis-pipeline" / "sources"
-SOURCES = (
-    "investor_slides",
-    "supplementary_financials",
-    "rts",
-    "pillar3",
-    "transcripts",
-)
+SOURCES = source_keys()
 
 
 def main() -> int:
@@ -48,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-pipeline",
         action="store_true",
-        help="Skip database/main.py and only run requested post-processing steps.",
+        help="Skip source main.py and only run requested post-processing steps.",
     )
     parser.add_argument(
         "--load",
@@ -65,9 +60,18 @@ def run_source(source_name: str, *, skip_pipeline: bool, load: bool) -> None:
 
     print(f"\n== {source_name} ==")
     if not skip_pipeline:
-        run([sys.executable, "database/main.py"], cwd=source_dir)
+        run([sys.executable, "main.py"], cwd=source_dir)
     if load:
-        run([sys.executable, "scripts/load_master_data_csv.py", "--apply"], cwd=source_dir)
+        run(
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts" / "load_retrieval_master_csvs.py"),
+                "--source",
+                source_name,
+                "--apply",
+            ],
+            cwd=PROJECT_ROOT,
+        )
 
 
 def run(command: list[str], *, cwd: Path) -> None:

@@ -1,0 +1,102 @@
+model: aegis
+layer: transcripts
+name: content_extraction
+version: '2.0'
+description: |
+  Extract source-aware keywords and canonical financial metric labels from each content unit for sparse retrieval indexing.
+system_prompt: |
+  You are a source-grounded content enrichment agent for bank earnings transcripts. Extract retrieval terms only from supplied content units. Always use the provided tool.
+user_prompt: |
+  Extract keywords and canonical financial metric labels from each content unit. Every <unit> id in the input must appear exactly once in the output.
+  Success criteria:
+  1. Keywords are short atomic retrieval terms, usually 1-3 words. Include
+     visible acronyms, product names, business segments, geography labels,
+     speaker names, analyst firms, transcript sections, notable periods, and
+     important printed values. Examples: "CET1", "PCL", "Credit Cards",
+     "Canadian Banking", "Q1/26", "13.7%", "455 bps", "outlook", "Q&A".
+
+  2. Metrics are canonical labels, not observations. Include every distinct
+     financial metric label explicitly present in the unit text. Do not include
+     periods, dates, or numeric values in the metrics field.
+
+  3. When a metric is clearly tied to a business segment, product, geography,
+     portfolio, or other durable slice, use exactly:
+     "Metric Name | Segment: Segment Name". If no specific segment is clear,
+     use only "Metric Name".
+
+  4. For transcript units, pay special attention to speaker names, executive
+     titles, analyst names, prepared-remarks topics, Q&A question topics,
+     management answers, segment labels, metric labels, outlook language, and
+     notable values quoted in the unit.
+
+  5. Prefer precise terms over generic ones. Do not emit the issuer name unless
+     it distinguishes this unit from nearby units; issuer, period, and source
+     are already captured in document metadata.
+
+  6. Metrics, segment labels, keywords, and values must appear in the supplied
+     content text. Do not tag implied metrics, inferred trends, hidden values,
+     or uncertain labels. Preserve visible symbols and units such as %, bps,
+     $, parentheses, ~, and +/- when used in keywords.
+
+  7. Do not tag ubiquitous regulators or frameworks on every transcript unit. Include
+     terms such as OSFI, Basel, IFRS, or CET1 only when the unit specifically
+     discusses that requirement, schedule, or metric.
+
+  8. Target 6-12 keywords per normal unit and include all distinct metric
+     labels that are meaningful for retrieval. Fewer are acceptable for sparse
+     units such as disclaimers or operator instructions.
+
+  9. If a unit's content is sparse, empty, or lacks meaningful keywords and
+      metrics, still include the unit with empty keywords and metrics arrays.
+      Never omit a unit and never repeat a unit_id.
+
+  Content units:
+  {user_input}
+tool_definition:
+  type: function
+  function:
+    name: extract_content_metadata
+    description: |
+      Return retrieval metadata for every supplied content unit. Each item must copy one input unit id verbatim and include short keywords plus canonical financial metric labels. Return empty arrays for sparse units instead of inventing terms.
+    parameters:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              unit_id:
+                type: string
+                description: |
+                  The content unit identifier copied verbatim from the input <unit id="..."> attribute. Each input unit_id must appear exactly once across the items array.
+              keywords:
+                type: array
+                items:
+                  type: string
+                description: |
+                  Short atomic retrieval terms from visible content. Include acronyms, product/segment/geography labels, speaker names, transcript section labels, notable periods, and important printed values.
+              metrics:
+                type: array
+                items:
+                  type: string
+                description: |
+                  Unique canonical financial metric labels explicitly present in the text. Use "Metric Name" or "Metric Name | Segment: Segment Name". Do not include periods, dates, or numeric values.
+            required:
+            - unit_id
+            - keywords
+            - metrics
+            additionalProperties: false
+          description: |
+            Keywords and financial metric labels for each content unit. The array length must equal the number of input units.
+        rationale:
+          type: string
+          description: |
+            Brief note on extraction approach and any sparse-content handling.
+      required:
+      - items
+      - rationale
+      additionalProperties: false
+_archive:
+  selected_from: local_yaml_current_repo
+  local_path: aegis-pipeline/sources/transcripts/database/pipeline/prompts/content_extraction.yaml

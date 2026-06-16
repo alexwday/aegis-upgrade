@@ -1,5 +1,5 @@
 """
-Tool implementation for four-source Aegis document research.
+Tool implementation for multi-source Aegis document research.
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ class RetrieverSpec:
 
 SOURCE_LABELS: Dict[str, str] = {
     "transcripts": "Transcripts",
+    "event_transcripts": "Event transcripts",
     "investor_slides": "Investor slides",
     "supplementary_financials": "Supplementary financials",
     "rts": "Reports to shareholders",
@@ -60,6 +61,12 @@ DOCUMENT_RETRIEVERS: Dict[str, RetrieverSpec] = {
         retrieve_module="aegis_agent.model.subagents.transcripts.main",
         retrieve_function="retrieve_transcripts",
         pipeline_module="aegis_agent.model.subagents.transcripts.pipeline",
+    ),
+    "event_transcripts": RetrieverSpec(
+        label="Event transcripts",
+        retrieve_module="aegis_agent.model.subagents.event_transcripts.main",
+        retrieve_function="retrieve_event_transcripts",
+        pipeline_module="aegis_agent.model.subagents.event_transcripts.pipeline",
     ),
     "investor_slides": RetrieverSpec(
         label="Investor slides",
@@ -1095,9 +1102,78 @@ async def _run_one_source_with_progress(
     progress: ResearchProgressStore,
 ) -> ResearchResult:
     """Run one source and record its completion before sibling sources finish."""
-    result = await _run_one_source(source, request, context, output_queue, progress)
+    try:
+        result = await _run_one_source(source, request, context, output_queue, progress)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger = get_logger()
+        logger.exception(
+            "agent.source_research.failed",
+            execution_id=context.get("execution_id"),
+            source=source,
+            error=str(exc),
+        )
+        result = _source_failure_result(source, request, exc)
+        await progress.add(
+            source,
+            "source_error",
+            "error",
+            result.quick_summary,
+            metadata={
+                "source_label": _source_label(source),
+                "error": result.gaps[0].reason if result.gaps else str(exc),
+            },
+            visible=True,
+        )
     await _record_source_complete(source, result, progress)
     return result
+
+
+def _source_error_reason(source_label: str, exc: Exception) -> str:
+    """Return a concise source-level error without leaking SQL text to the model."""
+    message = " ".join(str(exc).split())
+    lowered = message.lower()
+    if "undefinedtableerror" in lowered or (
+        "relation" in lowered and "does not exist" in lowered
+    ):
+        if "embeddings" in lowered:
+            return (
+                f"{source_label} is unavailable because its required embeddings table "
+                "is missing. Load or create that source store, then retry."
+            )
+        return (
+            f"{source_label} is unavailable because a required source table is missing. "
+            "Load or create that source store, then retry."
+        )
+    return f"{source_label} research failed: {_compact_text(message, 220)}"
+
+
+def _source_failure_result(
+    source: SourceId,
+    request: ResearchRequest,
+    exc: Exception,
+) -> ResearchResult:
+    """Convert one source exception into an aggregate-friendly research result."""
+    source_label = _source_label(source)
+    reason = _source_error_reason(source_label, exc)
+    return ResearchResult(
+        status="error",
+        quick_summary=f"{source_label} research could not run. {reason}",
+        gaps=[
+            Gap(
+                combo_label=f"{source_label}: {combo.label}",
+                reason=reason,
+            )
+            for combo in request.combinations
+        ],
+        coverage=[
+            CoverageItem(
+                combo_label=f"{source_label}: {combo.label}",
+                status="error",
+                source=source,
+            )
+            for combo in request.combinations
+        ],
+    )
 
 
 async def run_research_tool(
@@ -1145,7 +1221,13 @@ async def run_research_tool(
             )
             for source in request.sources
         ]
-        source_results = await asyncio.gather(*tasks)
+        gathered_results = await asyncio.gather(*tasks, return_exceptions=True)
+        source_results = [
+            result
+            if isinstance(result, ResearchResult)
+            else _source_failure_result(source, request, result)
+            for source, result in zip(request.sources, gathered_results)
+        ]
         result = _aggregate_results(source_results)
         source_dropdowns = [
             _format_source_result_dropdown(source, source_result)

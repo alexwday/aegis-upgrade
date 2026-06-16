@@ -24,7 +24,6 @@ setup(
     include_package_data=True,
     package_data={
         "aegis_agent": [
-            "model/prompts/**/*.yaml",
             "utils/ssl/*.cer",
         ],
     },

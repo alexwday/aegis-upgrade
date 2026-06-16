@@ -38,6 +38,11 @@ PIPELINE_SOURCES = OrderedDict(
             "input_dir": "aegis-documents/transcripts",
             "master_table": "earnings_transcripts_master_data",
         },
+        "event_transcripts": {
+            "data_source": "event-transcripts",
+            "input_dir": "aegis-documents/event_transcripts",
+            "master_table": "event_transcripts_master_data",
+        },
     }
 )
 
@@ -45,7 +50,12 @@ PIPELINE_SOURCES = OrderedDict(
 def main() -> int:
     args = parse_args()
     env_path = args.env_file.expanduser().resolve()
-    values = read_env(env_path)
+    try:
+        values = read_env(env_path)
+    except FileNotFoundError:
+        if not args.check:
+            raise
+        values = {}
 
     writes = {
         PROJECT_ROOT / "aegis-agent" / ".env": agent_env(values),
@@ -56,7 +66,6 @@ def main() -> int:
             / "aegis-pipeline"
             / "sources"
             / source_name
-            / "database"
             / ".env"
         ] = pipeline_env(values, metadata)
 

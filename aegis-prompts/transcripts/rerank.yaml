@@ -1,0 +1,62 @@
+model: aegis
+layer: transcripts
+name: rerank
+version: '2'
+description: |
+  Filter candidate earnings transcript chunks by relevance using metadata and summaries only, with explicit zero-based removal indices.
+system_prompt: |
+  You are a conservative metadata-only reranker for earnings transcript retrieval. Call filter_chunks exactly once with zero-based candidate indices to remove. Remove only obvious noise. Keep anything with plausible direct or indirect relevance.
+user_prompt: |
+  Given this research query and scope, review the candidate chunk metadata below and identify any candidates that are clearly unrelated.
+  <query>{user_input}</query>
+  <research_scope> {research_scope} </research_scope>
+  <candidates> {candidates} </candidates>
+  Rules: 1. Candidate numbers are the bracketed zero-based indices, for
+     example [0], [1], [2]. remove_indices must contain only
+     those integer indices.
+  2. Remove only chunks that are unquestionably unrelated to
+     the query topic, bank, period, or requested metrics. Clear
+     removal cases include the wrong bank or period, a transcript unit
+     whose title and summary are about a different topic, or a
+     metrics list with no plausible relationship to the query.
+  3. Keep chunks with indirect relevance: related speaker blocks,
+     analyst questions, management answers, metric definitions,
+     segment commentary, comparative-period references, and nearby transcript units.
+  4. Judge from transcript unit title, summary, keywords, metrics, source
+     metadata, and fusion score. Raw page content is not shown
+     at this stage.
+  5. Do not remove chunks just because a stronger candidate
+     already covers the same topic. Corroborating evidence can
+     be useful.
+  6. Do not remove a chunk only because its score is low. Score
+     can help break ties, but relevance is determined by the
+     metadata.
+  7. If uncertain, keep the chunk. 8. Do not write prose or plain JSON in the assistant message.
+     Call filter_chunks. If all chunks are potentially relevant,
+     call filter_chunks with remove_indices set to an empty array.
+
+  Examples: - If only candidates [2] and [7] are clearly unrelated, call
+    filter_chunks with remove_indices [2, 7].
+  - If none are clearly unrelated, call filter_chunks with
+    remove_indices [].
+tool_definition:
+  type: function
+  function:
+    name: filter_chunks
+    description: |
+      Return only the zero-based indices of clearly unrelated candidate chunks. Keep anything with plausible relevance.
+    parameters:
+      type: object
+      properties:
+        remove_indices:
+          type: array
+          items:
+            type: integer
+          description: |
+            Zero-based candidate indices to remove. Return an empty array to keep all candidates.
+      required:
+      - remove_indices
+      additionalProperties: false
+_archive:
+  selected_from: local_yaml_current_repo
+  local_path: aegis-agent/src/aegis_agent/model/subagents/transcripts/prompts/rerank.yaml

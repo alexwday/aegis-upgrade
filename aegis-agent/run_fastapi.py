@@ -32,6 +32,15 @@ from aegis_agent.utils.logging import get_logger, setup_logging  # noqa: E402
 setup_logging()
 logger = get_logger()
 
+SOURCE_FILTER_IDS = {
+    "transcripts",
+    "event_transcripts",
+    "investor_slides",
+    "supplementary_financials",
+    "rts",
+    "pillar3",
+}
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -82,6 +91,21 @@ def _user_message_from_payload(payload: Dict[str, Any]) -> Dict[str, str]:
     return {"role": "user", "content": content}
 
 
+def _source_filter_from_payload(payload: Dict[str, Any]) -> List[str] | None:
+    """Return a validated per-turn source filter from the websocket payload."""
+    raw_sources = payload.get("source_filter")
+    if not isinstance(raw_sources, list):
+        return None
+
+    selected: List[str] = []
+    for source in raw_sources:
+        normalized = str(source or "").strip()
+        if normalized in SOURCE_FILTER_IDS and normalized not in selected:
+            selected.append(normalized)
+
+    return selected or None
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket) -> None:
     """Handle one websocket chat session."""
@@ -104,13 +128,14 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 )
                 continue
 
+            source_filter = _source_filter_from_payload(payload)
             conversation_state["messages"].append(user_message)
             await websocket.send_json({"type": "status", "name": "system", "content": "Thinking"})
 
             assistant_parts: List[str] = []
             latest_card_question = ""
 
-            async for event in model(conversation_state):
+            async for event in model(conversation_state, source_filter=source_filter):
                 await websocket.send_json(event)
                 event_type = event.get("type")
                 content = event.get("content")

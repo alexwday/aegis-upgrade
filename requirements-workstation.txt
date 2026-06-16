@@ -1,5 +1,5 @@
 # One-venv workstation install for the root Aegis upgrade workspace.
-# Source-specific requirements are left intact under each component folder.
+# This is the canonical dependency list for the consolidated workspace.
 
 # App framework
 fastapi==0.115.0
@@ -16,6 +16,7 @@ requests==2.34.1
 asyncpg==0.30.0
 psycopg2-binary==2.9.12
 SQLAlchemy==2.0.36
+greenlet==3.5.1
 
 # Data/document processing
 pandas==2.2.3

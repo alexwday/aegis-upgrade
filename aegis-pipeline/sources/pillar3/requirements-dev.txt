@@ -1,6 +1,0 @@
-# Local quality gates only; production runtime dependencies remain unchanged.
-black==26.3.1
-flake8==7.3.0
-pylint==4.0.5
-pytest==9.0.3
-ruff==0.15.12

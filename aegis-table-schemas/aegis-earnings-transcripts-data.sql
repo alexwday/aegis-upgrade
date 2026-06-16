@@ -1,4 +1,4 @@
--- Schema generated from aegis-pipeline/sources/transcripts/scripts/create_master_data_table.py.
+-- Schema generated from scripts/create_retrieval_tables.py --source transcripts.
 -- This table is referenced by the transcripts subagent but was not present in
 -- the local Postgres database exported on 2026-06-15.
 

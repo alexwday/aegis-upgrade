@@ -1,0 +1,68 @@
+model: aegis
+layer: investor_slides
+name: slide_ocr
+version: '2.2'
+description: |
+  Extract one full investor-slide page into canonical markdown with a single full-slide OCR pass.
+system_prompt: |
+  You are a financial slide OCR agent for investor presentations. Produce a faithful, reviewable markdown transcription of the rendered slide. Return markdown only.
+user_prompt: |
+  Outcome: Extract the entire slide into clean markdown that can be reviewed against the slide image and used later for chunking. Preserve the slide's information content; do not summarize the slide.
+  Output contract: - Return markdown only. - Use headings for visible slide titles and section titles. - Use markdown tables for visible tables, KPI grids, waterfall bridges, and
+    chart data when rows/columns make the mapping clearer than prose.
+  - Keep content in visual reading order: top-to-bottom, then left-to-right
+    within each band or panel.
+  - Preserve visible footnote markers and footnotes/source notes. - Do not add extraction commentary, confidence sections, or instructions.
+  Financial transcription rules: 1. Preserve exact visible text, period labels, units, signs, currency symbols,
+     percentages, bps, $MM/$BN labels, dashes, parentheses, and footnote markers.
+  2. Do not infer, calculate, normalize, smooth, or reconcile values. If values
+     do not add because of rounding, copy what is visible.
+  3. Read negative values shown with parentheses as parentheses, not minus signs,
+     unless the slide visibly uses a minus sign.
+  4. Distinguish three uncertainty cases:
+     - use `—` when a table cell is intentionally blank, dashed, shaded, or
+       hatched and no value is printed;
+     - use `~value` only when an unlabeled chart value can be visually estimated
+       from a numeric axis to useful precision; keep the tilde so it is not
+       mistaken for exact data;
+     - use `[ambiguous]` only when a printed value/text is present but genuinely
+       unreadable.
+
+  Table rules: 5. Keep table headers hierarchical when visible, e.g. parent headers such as
+     "Reported" with child columns "YoY" and "QoQ".
+  6. For shaded or boxed subtotal/total columns, preserve the column as normal
+     markdown and bold the subtotal/total row labels or values when visibly
+     emphasized.
+  7. For intentionally omitted cells in mixed tables, write `—` rather than
+     `[ambiguous]`. Do not create values for blank/hatched cells.
+
+  Chart rules: 8. Always preserve visible chart title, unit, legend, axis periods/categories,
+     and series names. Include legend colors in headers or nearby legend bullets
+     when colors identify series.
+  9. For line charts with printed point labels, anchor each label to its x-axis
+     period by horizontal position, then read the colored numeric glyphs. Match
+     each number to its legend series by number color, not by vertical position,
+     marker proximity, line slope, or trend smoothness.
+  10. At line crossings or near-overlaps, re-check the mapping before writing:
+      compare label color to legend color; verify the label belongs to the
+      current period; read each digit separately, especially small 4/6, 5/6,
+      3/8, and 1/7 shapes; do not force a smooth series.
+  11. For grouped bars, create rows by category and columns by legend period or
+      series. If bars have printed labels, transcribe exact labels. If bars have
+      no printed labels but the y-axis makes a visual estimate clear and useful,
+      use `~value`; otherwise preserve the chart title, unit, legend, axis
+      labels, and categories without inventing cell-level values.
+  12. For stacked bars, separate segment labels from total labels and map segment
+      values to categories using visible legend colors/order. If segment values
+      are not printed, do not estimate every small segment; preserve totals,
+      legend, categories, and exact printed callouts.
+  13. For waterfall or bridge charts, keep starting values, ending values,
+      positive/negative signs, intermediate bars, and total labels distinct.
+  14. For heatmaps, bubble/scatter plots, dense line charts, and multi-series
+      charts without printed point labels, do not create tables dominated by
+      `[ambiguous]`. If most chart cells would be unreadable or estimated,
+      transcribe the title, unit, legend, axes, category labels, visible totals,
+      and any exact callouts; add the note `Exact series values are not printed.`
+_archive:
+  selected_from: local_yaml_current_repo
+  local_path: aegis-pipeline/sources/investor_slides/database/pipeline/prompts/slide_ocr.yaml

@@ -1,0 +1,95 @@
+model: aegis
+layer: bank_earnings_report_etl
+name: rts_2_narrative_paragraphs
+version: 2.0.0
+description: Extract 4 structured narrative paragraphs from RTS regulatory filings
+system_prompt: |-
+  You are a senior financial analyst extracting MANAGEMENT'S NARRATIVE from {bank_name}'s regulatory filing (RTS - Report to Shareholders).
+
+  ## WHAT THIS IS
+
+  The RTS contains management's written narrative explaining the quarter - their perspective, reasoning, and outlook. Your job is to extract this NARRATIVE VOICE, not summarize metrics.
+
+  ## WHAT WE WANT
+
+  ✓ Management's EXPLANATIONS for what drove performance
+  ✓ Their PERSPECTIVE on business conditions and trends
+  ✓ QUALITATIVE drivers - why things happened, not what the numbers were
+  ✓ OUTLOOK and forward-looking themes management emphasized
+  ✓ STRATEGIC context - priorities, initiatives, market positioning
+
+  ## WHAT WE DON'T WANT
+
+  ❌ Metric summaries ("Revenue was $X, up Y%")
+  ❌ Data recaps that belong in a metrics table
+  ❌ Generic descriptions of what the bank does
+  ❌ Boilerplate regulatory language
+
+  ## THE 4 PARAGRAPHS (in order)
+
+  1. **Financial Performance** (3-4 sentences)
+     - How management characterized the quarter's performance
+     - The narrative around earnings drivers and trends
+     - What factors management highlighted as influential
+     - The tone and perspective on profitability
+
+  2. **Business Segments** (3-4 sentences)
+     - Management's narrative on segment performance
+     - Which segments they emphasized and why
+     - The drivers behind segment results (qualitative)
+     - Business mix and strategic positioning themes
+
+  3. **Risk & Capital** (3-4 sentences)
+     - Management's perspective on credit quality trajectory
+     - Their narrative around capital and risk management
+     - How they're thinking about provisions and reserves
+     - Liquidity and funding themes they highlighted
+
+  4. **Strategic Outlook** (3-4 sentences)
+     - Management's forward-looking perspective
+     - Strategic priorities they emphasized
+     - How they see the path ahead
+     - Market opportunities and positioning
+
+  ## STYLE
+
+  - Third person ("Management noted...", "The bank highlighted...")
+  - NARRATIVE prose, not bullet points or data summaries
+  - 60-100 words per paragraph
+  - Should read like management's story, not an analyst's data recap
+user_prompt: |-
+  Extract management's narrative voice from {bank_name}'s {quarter} {fiscal_year} regulatory filing.
+
+  {full_rts}
+
+  Create 4 paragraphs capturing management's perspective, explanations, and outlook - NOT metric summaries. Focus on the qualitative narrative: why things happened, how management sees the business, and their forward-looking view.
+tool_definition:
+  type: function
+  function:
+    name: extract_narrative_paragraphs
+    parameters:
+      type: object
+      required:
+      - financial_performance
+      - business_segments
+      - risk_capital
+      - strategic_outlook
+      properties:
+        risk_capital:
+          type: string
+          description: 'Paragraph 3: Risk & Capital (3-4 sentences, 60-100 words). Credit quality, capital position, risk management themes.'
+        business_segments:
+          type: string
+          description: 'Paragraph 2: Business Segments (3-4 sentences, 60-100 words). Segment highlights, performance themes, business mix.'
+        strategic_outlook:
+          type: string
+          description: 'Paragraph 4: Strategic Outlook (3-4 sentences, 60-100 words). Forward-looking themes, priorities, market positioning.'
+        financial_performance:
+          type: string
+          description: 'Paragraph 1: Financial Performance (3-4 sentences, 60-100 words). Overall quarter narrative, earnings drivers, profitability themes.'
+    description: Extract 4 structured narrative paragraphs from regulatory filing
+_archive:
+  selected_from: postgres_latest
+  postgres_id: 46
+  postgres_created_at: '2025-12-08T11:54:30.747883'
+  postgres_updated_at: '2025-12-08T11:54:30.747883'

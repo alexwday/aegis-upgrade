@@ -6,7 +6,7 @@ Thumbs.db
 *.env
 !*.env.example
 aegis-agent/.env
-aegis-pipeline/sources/*/database/.env
+aegis-pipeline/sources/*/.env
 
 # Python environments and caches.
 .venv/
@@ -22,7 +22,7 @@ htmlcov/
 aegis-pipeline/sources/*/data-output/
 aegis-pipeline/sources/*/progress/
 aegis-pipeline/sources/*/logs/
-aegis-pipeline/sources/*/tokenizer-cache/
+aegis-pipeline/tokenizer-cache/
 aegis-agent/logs/
 
 # Local editor/app state.

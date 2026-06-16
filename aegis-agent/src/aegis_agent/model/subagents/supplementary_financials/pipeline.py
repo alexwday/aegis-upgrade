@@ -3,11 +3,9 @@
 import asyncio
 import json
 import re
-from pathlib import Path
 from time import perf_counter
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
-import yaml
 from sqlalchemy import text
 
 from ....connections.llm_connector import complete_with_tools, embed_batch
@@ -18,7 +16,6 @@ from ....utils.settings import config
 
 DATA_TABLE = 'public."aegis-financial-supp-data"'
 EMBEDDINGS_TABLE = 'public."aegis-financial-supp-embeddings"'
-PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 SUPPLEMENTARY_FINANCIALS_MODEL_TIER = "small"
 
 SEARCH_TOP_K = 20
@@ -1185,24 +1182,14 @@ def resolve_tool_choice(prompt: Dict[str, Any]) -> Any:
 
 
 def load_stage_prompt(prompt_name: str, execution_id: Optional[str] = None) -> Dict[str, Any]:
-    """Load a supplementary financials stage prompt from DB, falling back to YAML."""
-    logger = get_logger()
-    try:
-        prompt_data = load_prompt_from_db(
-            layer="supplementary_financials",
-            name=prompt_name,
-            compose_with_globals=False,
-            execution_id=execution_id,
-        )
-        return normalize_db_stage_prompt(prompt_data, prompt_name)
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning(
-            "subagent.supplementary_financials.prompt_db_fallback",
-            execution_id=execution_id,
-            prompt_name=prompt_name,
-            error=str(exc),
-        )
-    return load_stage_prompt_from_yaml(prompt_name)
+    """Load a stage prompt from PostgreSQL."""
+    prompt_data = load_prompt_from_db(
+        layer="supplementary_financials",
+        name=prompt_name,
+        compose_with_globals=False,
+        execution_id=execution_id,
+    )
+    return normalize_db_stage_prompt(prompt_data, prompt_name)
 
 
 def normalize_db_stage_prompt(prompt_data: Dict[str, Any], prompt_name: str) -> Dict[str, Any]:
@@ -1224,16 +1211,9 @@ def normalize_db_stage_prompt(prompt_data: Dict[str, Any], prompt_name: str) -> 
         "description": prompt_data.get("description"),
         "system_prompt": str(system_prompt),
         "user_prompt": str(user_prompt),
-        "tool_choice": "required",
+        "tool_choice": "required" if tools else "none",
         "tools": tools,
     }
-
-
-def load_stage_prompt_from_yaml(prompt_name: str) -> Dict[str, Any]:
-    """Load a supplementary financials stage prompt from package YAML."""
-    prompt_path = PROMPTS_DIR / f"{prompt_name}.yaml"
-    with prompt_path.open("r", encoding="utf-8") as prompt_file:
-        return yaml.safe_load(prompt_file)
 
 
 def extract_tool_arguments(response: Dict[str, Any]) -> Dict[str, Any]:

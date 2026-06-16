@@ -1,5 +1,5 @@
 """
-Typed contracts for the four-source Aegis agent.
+Typed contracts for the multi-source Aegis agent.
 """
 
 from __future__ import annotations
@@ -14,12 +14,15 @@ ResearchStatus = Literal["success", "partial_success", "no_available_data", "err
 ComboStatus = Literal["available", "unavailable", "complete", "incomplete", "error"]
 SourceId = Literal[
     "transcripts",
+    "event_transcripts",
     "investor_slides",
     "supplementary_financials",
     "rts",
     "pillar3",
 ]
 DEFAULT_DOCUMENT_SOURCES: List[SourceId] = [
+    "transcripts",
+    "event_transcripts",
     "investor_slides",
     "supplementary_financials",
     "rts",

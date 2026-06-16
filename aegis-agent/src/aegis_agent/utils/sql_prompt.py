@@ -147,10 +147,12 @@ class SQLPromptManager:
                     missing_params.append("layer")
                 if not name:
                     missing_params.append("name")
-                logger.warning(
-                    f"Missing mandatory parameters: {', '.join(missing_params)}. All of model, layer, and name are required."
+                message = (
+                    "Missing mandatory parameters: "
+                    f"{', '.join(missing_params)}. All of model, layer, and name are required."
                 )
-                return "Blank"
+                logger.warning(message)
+                raise ValueError(message)
 
             # Start with all prompts
             filtered_df = self.df_prompts.copy()
@@ -164,8 +166,9 @@ class SQLPromptManager:
 
             # Check if any results found
             if filtered_df.empty:
-                logger.warning(f"No prompt found for model={model}, layer={layer}, name={name}")
-                return "Blank"
+                message = f"No prompt found for model={model}, layer={layer}, name={name}"
+                logger.warning(message)
+                raise LookupError(message)
 
             # Get the first row (should be the latest due to _df_prompts query)
             row = filtered_df.iloc[0]
@@ -185,7 +188,7 @@ class SQLPromptManager:
 
         except Exception as e:
             logger.error(f"Error retrieving latest prompt from DataFrame: {str(e)}")
-            return "Blank"
+            raise
 
 
 prompt_manager = None

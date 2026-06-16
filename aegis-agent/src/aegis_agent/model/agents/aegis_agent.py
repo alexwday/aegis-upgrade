@@ -6,51 +6,87 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
-
-import yaml
 
 from ...connections.llm_connector import stream_with_tools
 from ...utils.logging import get_logger
 from ...utils.prompt_loader import load_prompt_from_db
+from .schemas import DEFAULT_DOCUMENT_SOURCES
 from .tools import AGENT_TOOLS, dispatch_tool_call
 
 
 MAX_AGENT_LOOPS = 6
 
+SOURCE_LABELS = {
+    "transcripts": "transcripts",
+    "event_transcripts": "event transcripts",
+    "investor_slides": "investor slides",
+    "supplementary_financials": "supplementary financials",
+    "rts": "reports to shareholders",
+    "pillar3": "Pillar 3",
+}
+
 
 def _load_system_prompt() -> str:
-    """Load the agent system prompt from YAML with a safe fallback."""
-    prompt_path = Path(__file__).parents[1] / "prompts" / "aegis_agent.yaml"
-    fallback = (
-        "You are Aegis, a financial research agent for RBC's CFO Group. "
-        "You can research investor slides, supplementary financials, RTS, and Pillar 3. "
-        "Clarify ambiguous "
-        "bank, fiscal year, quarter, or question scope before calling tools."
+    """Load the agent system prompt from PostgreSQL."""
+    prompt_data = load_prompt_from_db(
+        "aegis_agent",
+        "system",
+        compose_with_globals=False,
     )
-    try:
-        prompt_data = load_prompt_from_db(
-            "aegis_agent",
-            "system",
-            compose_with_globals=False,
+    system_prompt = prompt_data.get("system_prompt")
+    if not system_prompt:
+        raise ValueError("Prompt aegis/aegis_agent/system has no system_prompt")
+    return str(system_prompt)
+
+
+def _validated_sources(raw_sources: Any) -> List[str]:
+    """Return known source IDs while preserving the configured order."""
+    if not isinstance(raw_sources, list):
+        return []
+    seen = set()
+    valid_sources = set(DEFAULT_DOCUMENT_SOURCES)
+    selected: List[str] = []
+    for source in raw_sources:
+        normalized = str(source or "").strip()
+        if normalized in valid_sources and normalized not in seen:
+            seen.add(normalized)
+            selected.append(normalized)
+    return selected
+
+
+def _source_scope_message(context: Dict[str, Any]) -> str:
+    """Build a dynamic source-scope instruction for the current turn."""
+    selected_sources = _validated_sources(context.get("source_filter"))
+    default_sources = _validated_sources(context.get("db_names")) or list(DEFAULT_DOCUMENT_SOURCES)
+
+    if selected_sources:
+        source_list = ", ".join(selected_sources)
+        label_list = ", ".join(SOURCE_LABELS[source] for source in selected_sources)
+        return (
+            "User-selected source filter for this turn: "
+            f"{source_list}. Only call run_research with those source IDs and describe the "
+            f"research scope as using only: {label_list}."
         )
-        system_prompt = prompt_data.get("system_prompt")
-        if system_prompt:
-            return str(system_prompt)
-    except Exception:  # pylint: disable=broad-exception-caught
-        pass
 
-    if not prompt_path.exists():
-        return fallback
-
-    data = yaml.safe_load(prompt_path.read_text(encoding="utf-8")) or {}
-    return str(data.get("system_prompt") or fallback)
+    source_list = ", ".join(default_sources)
+    label_list = ", ".join(SOURCE_LABELS[source] for source in default_sources)
+    return (
+        "No source filter is selected for this turn. If the user asks for all sources, "
+        f"call run_research with all {len(default_sources)} sources: {source_list}. "
+        f"Describe them as: {label_list}."
+    )
 
 
-def _messages_for_agent(conversation_messages: Iterable[Dict[str, str]]) -> List[Dict[str, Any]]:
+def _messages_for_agent(
+    conversation_messages: Iterable[Dict[str, str]],
+    context: Dict[str, Any],
+) -> List[Dict[str, Any]]:
     """Build Chat Completions messages for the agent loop."""
-    messages: List[Dict[str, Any]] = [{"role": "system", "content": _load_system_prompt()}]
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": _load_system_prompt()},
+        {"role": "system", "content": _source_scope_message(context)},
+    ]
     for message in conversation_messages:
         role = message.get("role")
         content = message.get("content")
@@ -185,7 +221,7 @@ async def run_aegis_agent(
     feeds structured tool results back to the model, and streams UI events.
     """
     logger = get_logger()
-    messages = _messages_for_agent(conversation_messages)
+    messages = _messages_for_agent(conversation_messages, context)
     final_response_started = False
 
     for loop_index in range(MAX_AGENT_LOOPS):

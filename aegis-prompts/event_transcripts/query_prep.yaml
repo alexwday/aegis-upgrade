@@ -1,0 +1,91 @@
+model: aegis
+layer: event_transcripts
+name: query_prep
+version: '2'
+description: |
+  Decompose and enrich an event transcript query for multi-strategy search across FactSet transcript units with compact, scope-faithful facets.
+system_prompt: |
+  You are a query preparation analyst for event transcript retrieval. Convert each user question into compact search facets for management commentary, Q&A exchanges, speaker names, analyst questions, prepared remarks, business segments, and metrics. Be literal with the provided scope, avoid invented facts, and always call prepare_query.
+user_prompt: |
+  Prepare this research query for multi-strategy search across conference and analyst event transcripts.
+  <research_scope> {research_scope} </research_scope>
+  <user_input> {user_input} </user_input>
+  Rules: 1. Rewrite the query so it explicitly includes the relevant
+     bank, fiscal year, quarter, and financial context from the
+     research scope. Do not invent dates, banks, periods, or
+     filing types.
+     If the scope contains multiple banks or periods, keep the
+     rewrite metric/topic-focused and refer to the selected scope
+     collectively rather than overfitting to one bank.
+  2. Stay inside conference and analyst event transcripts. Prefer transcript vocabulary:
+     management discussion, prepared remarks, Q&A, analyst questions,
+     speaker names, executive titles, business segments, outlook,
+     guidance, credit quality, capital, expenses, revenue, NIM, PCL,
+     CET1, and metric labels. Do not add RTS, investor-slide, or
+     supplementary-financial terms unless the user explicitly asks for them.
+  3. Generate up to 3 unique sub_queries only for information
+     needs that are explicit or directly implied by the query.
+     Each sub-query must include the relevant bank, quarter,
+     fiscal year, and metric/topic context needed for standalone
+     retrieval.
+  4. Return 5-8 high-signal keywords: acronyms, table labels,
+     business segments, and financial terms that may appear in
+     speaker blocks, Q&A exchanges, or transcript summaries. Do not spend keyword slots
+     on generic words, bank names, quarters, or fiscal years
+     already provided by the research scope.
+  5. Return up to 8 metric names or metric-like labels. Prefer
+     source-table wording such as "net interest margin",
+     "provision for credit losses", "efficiency ratio", "CET1",
+     "net income", "revenue", "expenses", and segment metrics.
+  6. Write one short hypothetical answer paragraph that reflects
+     the kind of evidence likely to appear in the source. Do not
+     invent precise figures, percentages, basis points, or dollar
+     amounts. Use generic phrases such as "reported percentage"
+     or "reported amount."
+  7. Keep every field concise and non-overlapping so downstream
+     search stays focused.
+tool_definition:
+  type: function
+  function:
+    name: prepare_query
+    description: |
+      Return the rewritten query, focused sub-queries, keywords, metrics, and a hypothetical answer for transcript retrieval.
+    parameters:
+      type: object
+      properties:
+        rewritten_query:
+          type: string
+          description: |
+            The user query rewritten for search with explicit bank, quarter, fiscal year, and financial context.
+        sub_queries:
+          type: array
+          items:
+            type: string
+          description: |
+            0-3 focused standalone sub-queries for distinct information needs.
+        keywords:
+          type: array
+          items:
+            type: string
+          description: |
+            5-8 high-signal keywords from the query and scope.
+        metrics:
+          type: array
+          items:
+            type: string
+          description: |
+            Up to 8 metric names or source-table labels likely to appear in transcript units.
+        hyde_answer:
+          type: string
+          description: |
+            A short qualitative hypothetical answer for HyDE retrieval. Do not invent exact numeric values.
+      required:
+      - rewritten_query
+      - sub_queries
+      - keywords
+      - metrics
+      - hyde_answer
+      additionalProperties: false
+_archive:
+  selected_from: local_yaml_current_repo
+  local_path: aegis-agent/src/aegis_agent/model/subagents/event_transcripts/prompts/query_prep.yaml

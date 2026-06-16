@@ -13,10 +13,13 @@ from aegis_agent.model.agents.research import (
 )
 from aegis_agent.model.agents.schemas import (
     BankPeriodCombination,
+    DEFAULT_DOCUMENT_SOURCES,
+    Finding,
+    ResearchResult,
 )
 
 
-DOCUMENT_SOURCES = ["investor_slides", "supplementary_financials", "rts", "pillar3"]
+DOCUMENT_SOURCES = list(DEFAULT_DOCUMENT_SOURCES)
 
 
 def _args(*symbols: str) -> dict:
@@ -252,7 +255,7 @@ async def test_run_research_no_available_data(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_run_research_dispatches_all_document_sources(monkeypatch) -> None:
-    """Four-source research should emit one dropdown and coverage row per source."""
+    """Default research should emit one dropdown and coverage row per source."""
 
     async def fake_availability(_source, combinations, _context):
         return list(combinations), []
@@ -312,7 +315,7 @@ async def test_run_research_dispatches_all_document_sources(monkeypatch) -> None
         events.append(queue.get_nowait())
 
     assert result["status"] == "success"
-    assert len(result["findings"]) == 4
+    assert len(result["findings"]) == len(DOCUMENT_SOURCES)
     assert result["findings"][0]["finding_type"] == "quantitative"
     assert result["findings"][0]["metric"]["metric_name"] == "CET1"
     assert "[[E" in result["dropdown_markdown"]
@@ -324,6 +327,58 @@ async def test_run_research_dispatches_all_document_sources(monkeypatch) -> None
         for event in events
         if event["type"] == "subagent"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_research_keeps_working_sources_when_one_source_table_is_missing(
+    monkeypatch,
+) -> None:
+    """A missing source table should become a source gap, not abort all research."""
+
+    async def fake_run_one_source(source, request, context, output_queue, progress):
+        _ = request, context, output_queue, progress
+        if source == "transcripts":
+            raise RuntimeError(
+                'UndefinedTableError: relation "public.aegis-earnings-transcripts-embeddings" '
+                "does not exist"
+            )
+        return ResearchResult(
+            status="success",
+            quick_summary="Investor slides completed.",
+            findings=[
+                Finding(
+                    combo_label="Investor slides: RY-CA Q1 2026",
+                    summary="Investor slides finding.",
+                )
+            ],
+        )
+
+    monkeypatch.setattr("aegis_agent.model.agents.research._run_one_source", fake_run_one_source)
+
+    queue = asyncio.Queue()
+    result = await run_research_tool(
+        {
+            "question": "earnings performance",
+            "sources": ["transcripts", "investor_slides"],
+            "combinations": [{"bank_symbol": "RY-CA", "fiscal_year": 2026, "quarter": "Q1"}],
+        },
+        {"execution_id": "test"},
+        queue,
+    )
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    assert result["status"] == "partial_success"
+    assert result["findings"][0]["summary"] == "Investor slides finding."
+    assert result["gaps"][0]["combo_label"] == "Transcripts: RY-CA Q1 2026"
+    assert "required embeddings table is missing" in result["gaps"][0]["reason"]
+    assert "SELECT" not in result["gaps"][0]["reason"]
+    assert {event["name"] for event in events if event["type"] == "subagent"} == {
+        "transcripts",
+        "investor_slides",
+    }
 
 
 @pytest.mark.asyncio

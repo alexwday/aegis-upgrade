@@ -1,6 +1,0 @@
-openai==2.36.0
-openpyxl==3.1.5
-psycopg2-binary==2.9.12
-PyYAML==6.0.3
-requests==2.34.1
-tiktoken==0.12.0

@@ -15,6 +15,14 @@ from ..utils.logging import get_logger
 from ..utils.settings import config
 
 
+INVALID_AUTH_TOKENS = {
+    "placeholder-token",
+    "invalid-auth-method",
+    "no-oauth-configured",
+    "oauth-failed",
+}
+
+
 async def get_oauth_token(
     execution_id: str, ssl_config: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
@@ -207,10 +215,7 @@ async def setup_authentication(execution_id: str, ssl_config: Dict[str, Any]) ->
             }
 
         # Check if we got a valid token
-        if result.get("token") and result["token"] not in [
-            "placeholder-token",
-            "invalid-auth-method",
-        ]:
+        if result.get("token") and result["token"] not in INVALID_AUTH_TOKENS:
             return {
                 "success": True,
                 "status": "Success",

@@ -1,47 +1,40 @@
-"""
-Database filtering utilities.
-
-Handles filtering of available databases based on user-provided database names.
-"""
+"""Database filtering utilities backed by the `global/database` prompt row."""
 
 from typing import Dict, List, Optional
 
 import yaml
 
 from .logging import get_logger
+from . import sql_prompt
 
 
 def get_available_databases() -> Dict[str, Dict]:
     """
-    Load all available databases from the database.yaml file.
+    Load all available databases from the PostgreSQL global/database prompt.
 
     Returns:
         Dictionary of database configurations keyed by database ID
     """
     logger = get_logger()
+    if sql_prompt.prompt_manager is None:
+        sql_prompt.postgresql_prompts()
 
-    try:
-        # Load database YAML
-        import os
+    prompt_data = sql_prompt.prompt_manager.get_latest_prompt(
+        model="aegis",
+        layer="global",
+        name="database",
+        system_prompt=False,
+    )
+    if not isinstance(prompt_data, dict) or not prompt_data.get("system_prompt"):
+        raise ValueError("Prompt aegis/global/database has no system_prompt")
 
-        yaml_path = os.path.join(
-            os.path.dirname(__file__), "..", "model", "prompts", "global", "database.yaml"
-        )
+    data = yaml.safe_load(prompt_data["system_prompt"]) or {}
+    databases = {}
+    for db in data.get("databases", []):
+        databases[db["id"]] = db
 
-        with open(yaml_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-
-        # Convert list to dict keyed by ID
-        databases = {}
-        for db in data.get("databases", []):
-            databases[db["id"]] = db
-
-        logger.debug("Loaded databases", count=len(databases))
-        return databases
-
-    except Exception as e:
-        logger.error("Failed to load databases", error=str(e))
-        return {}
+    logger.debug("Loaded databases", count=len(databases))
+    return databases
 
 
 def filter_databases(db_names: Optional[List[str]] = None) -> Dict[str, Dict]:

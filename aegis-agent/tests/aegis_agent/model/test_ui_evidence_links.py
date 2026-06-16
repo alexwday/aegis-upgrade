@@ -90,3 +90,27 @@ def test_chat_template_uses_single_research_status_snapshot_board() -> None:
     assert "research-summary-body" in html
     assert "Completed source summaries" in html
     assert "Current step" not in html
+
+
+def test_chat_template_sends_source_filter_with_user_payloads() -> None:
+    """The composer should expose source filters and attach them to websocket payloads."""
+    template = Path(__file__).resolve().parents[3] / "templates" / "chat.html"
+    html = template.read_text(encoding="utf-8")
+
+    assert "Data source filter" in html
+    assert 'value="transcripts"' in html
+    assert 'value="event_transcripts"' in html
+    assert "function getSelectedSourceFilter" in html
+    assert "source_filter: sourceFilter" in html
+
+
+def test_chat_template_keeps_choice_cards_compact_and_completes_status() -> None:
+    """Choice cards should render as compact controls and close their status trace."""
+    template = Path(__file__).resolve().parents[3] / "templates" / "chat.html"
+    html = template.read_text(encoding="utf-8")
+
+    assert "max-height: 74px" in html
+    assert "grid-template-columns: repeat(auto-fit, minmax(240px, 1fr))" in html
+    assert "function completeChoiceTurn" in html
+    assert "completeChoiceTurn(turn)" in html
+    assert 'turn.statusText.textContent = "Selection received"' in html

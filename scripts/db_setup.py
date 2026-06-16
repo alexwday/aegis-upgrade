@@ -28,6 +28,7 @@ SOURCE_TABLES = {
     "rts": "aegis-rts-data",
     "pillar3": "aegis-pillar3-data",
     "transcripts": "aegis-earnings-transcripts-data",
+    "event_transcripts": "aegis-event-transcripts-data",
 }
 
 BANKS = {

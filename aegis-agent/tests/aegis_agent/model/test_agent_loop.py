@@ -4,7 +4,42 @@ from __future__ import annotations
 
 import pytest
 
-from aegis_agent.model.agents.aegis_agent import run_aegis_agent
+from aegis_agent.model.agents.aegis_agent import (
+    _source_scope_message,
+    run_aegis_agent,
+)
+from aegis_agent.model.agents.schemas import DEFAULT_DOCUMENT_SOURCES
+
+
+@pytest.fixture(autouse=True)
+def stub_system_prompt(monkeypatch) -> None:
+    """Keep loop tests independent from the live prompt database."""
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.aegis_agent._load_system_prompt",
+        lambda: "You are Aegis.",
+    )
+
+
+def test_source_scope_message_lists_all_default_sources() -> None:
+    """The model should see all six sources as the unfiltered default scope."""
+    message = _source_scope_message({"db_names": list(DEFAULT_DOCUMENT_SOURCES)})
+
+    assert "all 6 sources" in message
+    assert "transcripts, event_transcripts, investor_slides" in message
+    assert "supplementary_financials, rts, pillar3" in message
+    assert "all four" not in message
+
+
+def test_source_scope_message_honors_user_filter() -> None:
+    """The model should know when the UI selected a narrower source scope."""
+    message = _source_scope_message(
+        {"source_filter": ["event_transcripts", "transcripts"]}
+    )
+
+    assert "User-selected source filter" in message
+    assert "event_transcripts, transcripts" in message
+    assert "Only call run_research with those source IDs" in message
+    assert "all 6 sources" not in message
 
 
 @pytest.mark.asyncio

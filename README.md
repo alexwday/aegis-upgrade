@@ -9,8 +9,9 @@ and PostgreSQL table schemas.
 aegis-agent/          FastAPI chat app and retrieval agent
 aegis-documents/      Canonical Q1/Q2 source document drop folders
 aegis-pipeline/       Per-source ETL pipelines
+aegis-prompts/        Canonical YAML copy of Aegis prompt rows
 aegis-table-schemas/  PostgreSQL table DDL exports
-scripts/              Workstation setup, env sync, DB setup, pipeline runner
+scripts/              Root scripts for setup, env sync, DB, prompts, and pipelines
 ```
 
 ## Push To A New GitHub Repo
@@ -66,7 +67,7 @@ POSTGRES_PASSWORD=<password>
 ```
 
 Then sync the root `.env` into `aegis-agent/.env` and each pipeline
-`database/.env`:
+`.env`:
 
 ```bash
 .venv/bin/python scripts/sync_env.py
@@ -84,6 +85,19 @@ Create missing tables from `aegis-table-schemas/`:
 
 ```bash
 .venv/bin/python scripts/db_setup.py --apply
+```
+
+Create or refresh a source retrieval table pair directly:
+
+```bash
+.venv/bin/python scripts/create_retrieval_tables.py --source investor_slides --apply
+.venv/bin/python scripts/load_retrieval_master_csvs.py --source investor_slides --apply
+```
+
+Upsert the canonical prompt archive into `public.prompts`:
+
+```bash
+.venv/bin/python scripts/push_aegis_prompts.py
 ```
 
 If your database user cannot create extensions, ask your DBA to install

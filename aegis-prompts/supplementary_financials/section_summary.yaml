@@ -1,0 +1,106 @@
+model: aegis
+layer: supplementary_financials
+name: section_summary
+version: '1.0'
+description: |
+  Generate summaries and refined keywords/metrics for document sections. Processes sections in document order with progressive table of contents context.
+system_prompt: |
+  You are a document summarization agent for financial and corporate documents. Summarize each section provided and refine its keywords and metrics from the per-unit data. Always use the provided tool.
+user_prompt: |
+  Summarize each section below and refine its keywords and metrics from the per-unit extractions.
+
+  {user_input}
+
+  Rules:
+  1. Summarize the key content and findings of each section
+     in 2-4 sentences. Focus on data points, conclusions,
+     and actionable information.
+
+  2. For tabular or spreadsheet sections, include specific
+     metric names and notable values in the summary.
+
+  3. Refine keywords by selecting the 10-15 most
+     representative terms from the per-unit keywords.
+     Prioritize domain-specific and distinguishing terms.
+
+  4. Deduplicate metrics across units within the section.
+     Metrics should remain labels, not observations. Preserve
+     the exact format "Metric Name" or
+     "Metric Name | Segment: Segment Name"; do not add
+     periods, dates, or numeric values to the metrics array.
+
+  5. Each section summary should be self-contained and
+     readable without other sections.
+
+  6. Use the progressive table of contents to understand
+     document context and avoid redundancy across sections.
+
+  7. Return the exact section_id from the input for each
+     item. Every section_id in the input MUST appear in
+     the output exactly once — never skip a section and
+     never repeat a section_id. The number of items in
+     your output array MUST equal the number of <section>
+     blocks in the input. If two adjacent sections look
+     similar, they are still separate sections and must
+     each get their own output entry with their own
+     section_id.
+
+  8. If a section's content is sparse or unclear, still
+     include it in the output with a best-effort summary
+     and whatever keywords and metrics you can extract
+     (empty arrays are acceptable). Never omit a section
+     from the output — omission is treated as a hard
+     failure.
+tool_definition:
+  type: function
+  function:
+    name: summarize_section
+    description: |
+      Call this tool when you have summarized all sections in the batch and refined their keywords and metrics. Returns an array of items with section_id, summary, keywords, and metrics for each section, plus a brief rationale for the summarization approach.
+    parameters:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              section_id:
+                type: string
+                description: |
+                  The section identifier copied verbatim from the input <section id="..." attribute. Each input section_id must appear exactly once across the items array — duplicates are rejected.
+              summary:
+                type: string
+                description: |
+                  2-4 sentence summary of the section. Focus on key findings, data points, and conclusions.
+              keywords:
+                type: array
+                items:
+                  type: string
+                description: |
+                  10-15 refined keywords for the section. Distill from per-unit keywords, prioritize the most representative terms.
+              metrics:
+                type: array
+                items:
+                  type: string
+                description: |
+                  Refined financial metric labels for the section, deduplicated across units. Preserve "Metric Name" or "Metric Name | Segment: Segment Name"; do not include numeric values.
+            required:
+            - section_id
+            - summary
+            - keywords
+            - metrics
+            additionalProperties: false
+          description: |
+            Summary and refined metadata for each section in the batch. The array length MUST equal the number of input sections and every input section_id must appear exactly once.
+        rationale:
+          type: string
+          description: |
+            Brief note on summarization approach. Used for pipeline traceability.
+      required:
+      - items
+      - rationale
+      additionalProperties: false
+_archive:
+  selected_from: local_yaml_current_repo
+  local_path: aegis-pipeline/sources/supplementary_financials/database/pipeline/prompts/section_summary.yaml

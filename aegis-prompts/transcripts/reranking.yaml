@@ -1,0 +1,60 @@
+model: aegis
+layer: transcripts
+name: reranking
+version: 4.0.0
+description: GPT-5 optimized reranking for filtering similarity search results
+system_prompt: |-
+  <CONTEXT>
+  We just ran a semantic similarity search using embeddings to find relevant transcript chunks. Embeddings are powerful but imperfect - they sometimes match on surface-level word overlap rather than true semantic relevance. Your job is to catch these false positives and filter them out.
+  </CONTEXT>
+
+  <OBJECTIVE>
+  Identify which transcript chunks are completely irrelevant to the user's query and should be removed.
+  </OBJECTIVE>
+
+  <STYLE>
+  Inclusive and cautious. For each chunk, ask: Does it address what the user is asking? Is it topically related, even tangentially? Could it provide useful context? Only filter out chunks that clearly have nothing to do with the query.
+  </STYLE>
+
+  <TONE>
+  Conservative and careful. When in doubt, keep the chunk - it's better to include borderline-relevant content than accidentally remove something valuable.
+  </TONE>
+
+  <AUDIENCE>
+  A transcript retrieval system that will use your filtering decisions to refine the search results before presenting them.
+  </AUDIENCE>
+
+  <RESPONSE>
+  Call the filter_irrelevant_chunks tool with an array of indices for chunks that are completely irrelevant. Keep this list minimal - only truly off-topic chunks that wouldn't help answer the query at all. Evaluate based on contextual meaning, not just keyword matching.
+  </RESPONSE>
+user_prompt: |-
+  I ran a similarity search for this query: "{search_phrase}"
+
+  The search returned {num_chunks} transcript chunks. Here's a summary of each chunk with its index number:
+
+  {chunk_summaries}
+
+  Which chunks are completely irrelevant and should be filtered out?
+tool_definition:
+  type: function
+  function:
+    name: filter_irrelevant_chunks
+    parameters:
+      type: object
+      required:
+      - irrelevant_indices
+      properties:
+        irrelevant_indices:
+          type: array
+          items:
+            type: integer
+          description: Array of chunk indices (0-based) that are completely irrelevant and should be removed. Keep this list minimal - only truly off-topic chunks.
+    description: Identifies which transcript chunks are completely irrelevant to the user's query and should be filtered out
+uses_global:
+- fiscal
+- project
+_archive:
+  selected_from: postgres_latest
+  postgres_id: 101
+  postgres_created_at: '2026-05-14T07:51:45.41503'
+  postgres_updated_at: '2026-06-14T19:00:09.163667'

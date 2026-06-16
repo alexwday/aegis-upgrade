@@ -148,7 +148,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         # Top-level Configuration
         self.log_level = os.getenv("LOG_LEVEL", "INFO")
         self.auth_method = os.getenv("AUTH_METHOD", "api_key").lower()
-        self.api_key = os.getenv("API_KEY", "")
+        self.api_key = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY", "")
         self.environment = os.getenv("ENVIRONMENT", "local")  # local, dev, sai, or prod
 
         # Conversation Configuration

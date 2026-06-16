@@ -1097,8 +1097,8 @@
       }
 
       .choice {
-        max-width: 760px;
-        padding: 12px;
+        width: min(100%, 700px);
+        padding: 10px;
         border: 1px solid var(--generated-line);
         border-radius: 9px;
         background: var(--generated-surface);
@@ -1107,36 +1107,48 @@
       }
 
       .choice h3 {
-        margin: 0 0 10px;
-        font-size: 14px;
+        margin: 0 0 8px;
+        font-size: 13px;
+        line-height: 1.25;
       }
 
       .choice-grid {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        align-items: start;
+        gap: 6px;
       }
 
       .choice button {
-        min-height: 54px;
-        padding: 9px;
+        display: grid;
+        align-content: center;
+        gap: 2px;
+        min-height: 44px;
+        max-height: 74px;
+        padding: 7px 9px;
         border-color: var(--generated-line);
+        border-radius: 7px;
         background: var(--generated-soft);
         color: var(--generated-text);
         text-align: left;
+        overflow: hidden;
       }
 
       .choice-title {
         display: block;
         font-weight: 750;
+        overflow-wrap: anywhere;
       }
 
       .choice-desc {
-        display: block;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
         color: var(--generated-muted);
-        font-size: 11px;
-        line-height: 1.3;
-        margin-top: 3px;
+        font-size: 10px;
+        line-height: 1.25;
+        overflow: hidden;
+        overflow-wrap: anywhere;
       }
 
       .choice button:hover .choice-desc {
@@ -1154,6 +1166,66 @@
         padding: 10px;
         border-top: 1px solid var(--line);
         background: rgba(255, 255, 255, 0.86);
+      }
+
+      .source-filter {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+        flex-wrap: wrap;
+      }
+
+      .source-filter-label {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .source-preset,
+      .source-option {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #ffffff;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 750;
+        line-height: 1.1;
+        white-space: nowrap;
+      }
+
+      .source-preset {
+        color: var(--text);
+      }
+
+      .source-preset[aria-pressed="true"],
+      .source-option:has(input:checked) {
+        border-color: rgba(0, 93, 170, 0.42);
+        background: var(--soft);
+        color: var(--aegis-navy);
+      }
+
+      .source-options {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        flex-wrap: wrap;
+      }
+
+      .source-option input {
+        width: 13px;
+        height: 13px;
+        margin: 0;
+        accent-color: var(--accent);
       }
 
       textarea {
@@ -1229,6 +1301,14 @@
           grid-template-columns: 1fr;
         }
 
+        .source-filter {
+          align-items: stretch;
+        }
+
+        .source-options {
+          width: 100%;
+        }
+
         .response-frame {
           padding: 10px;
         }
@@ -1253,6 +1333,43 @@
         <div id="messages" class="messages"></div>
 
         <form id="composer" class="composer">
+          <div class="source-filter" aria-label="Data source filter">
+            <span class="source-filter-label">Sources</span>
+            <button
+              id="sourceDefault"
+              class="source-preset"
+              type="button"
+              aria-pressed="true"
+            >
+              Auto
+            </button>
+            <div id="sourceOptions" class="source-options">
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="transcripts" />
+                <span>Transcripts</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="event_transcripts" />
+                <span>Event transcripts</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="investor_slides" />
+                <span>Investor slides</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="supplementary_financials" />
+                <span>Supplementary financials</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="rts" />
+                <span>Reports to shareholders</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="pillar3" />
+                <span>Pillar 3</span>
+              </label>
+            </div>
+          </div>
           <textarea id="input" placeholder="Ask about Q1 2026 Canadian bank disclosures, slides, or regulatory reports"></textarea>
           <button class="send" type="submit">Send</button>
         </form>
@@ -1264,9 +1381,36 @@
       const connection = document.getElementById("connection");
       const composer = document.getElementById("composer");
       const input = document.getElementById("input");
+      const sourceDefault = document.getElementById("sourceDefault");
+      const sourceCheckboxes = Array.from(
+        document.querySelectorAll('input[name="source-filter"]'),
+      );
       let ws;
       let activeTurn = null;
       let currentUserRequest = "";
+
+      function getSelectedSourceFilter() {
+        const selected = sourceCheckboxes
+          .filter((checkbox) => checkbox.checked)
+          .map((checkbox) => checkbox.value);
+        return selected.length ? selected : null;
+      }
+
+      function updateSourceFilterState() {
+        const hasFilter = Boolean(getSelectedSourceFilter());
+        sourceDefault.setAttribute("aria-pressed", String(!hasFilter));
+      }
+
+      sourceDefault.addEventListener("click", () => {
+        sourceCheckboxes.forEach((checkbox) => {
+          checkbox.checked = false;
+        });
+        updateSourceFilterState();
+      });
+
+      sourceCheckboxes.forEach((checkbox) => {
+        checkbox.addEventListener("change", updateSourceFilterState);
+      });
 
       function escapeHtml(value) {
         return String(value)
@@ -1923,6 +2067,16 @@
         }
       }
 
+      function completeChoiceTurn(turn) {
+        if (!turn) {
+          return;
+        }
+        turn.waitingForUser = false;
+        turn.statusText.textContent = "Selection received";
+        turn.statusPanel.classList.add("hidden", "collapsed");
+        turn.trace?.classList.add("empty");
+      }
+
       function addTurnStatus(label, content, options = {}) {
         const turn = beginAssistantTurn();
         if (options.research) {
@@ -2114,6 +2268,7 @@
             grid.querySelectorAll("button").forEach((node) => {
               node.disabled = true;
             });
+            completeChoiceTurn(turn);
             appendMessage("user", "You", option.label);
             activeTurn = null;
             sendPayload({
@@ -2140,7 +2295,10 @@
           appendMessage("error", "Error", "WebSocket is not connected.");
           return;
         }
-        ws.send(JSON.stringify(payload));
+        const sourceFilter = getSelectedSourceFilter();
+        ws.send(
+          JSON.stringify(sourceFilter ? { ...payload, source_filter: sourceFilter } : payload),
+        );
       }
 
       function handleEvent(event) {
@@ -2254,6 +2412,7 @@
         }
       });
 
+      updateSourceFilterState();
       connect();
     </script>
   </body>

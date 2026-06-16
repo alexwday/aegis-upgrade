@@ -21,6 +21,15 @@ from .schemas import (
 from .ui_cards import build_choice_card_event
 
 
+RESEARCH_SOURCE_IDS = {
+    "investor_slides",
+    "supplementary_financials",
+    "rts",
+    "pillar3",
+    "transcripts",
+    "event_transcripts",
+}
+
 AGENT_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
@@ -80,6 +89,7 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
                                 "rts",
                                 "pillar3",
                                 "transcripts",
+                                "event_transcripts",
                             ],
                         },
                         "default": DEFAULT_DOCUMENT_SOURCES,
@@ -180,6 +190,28 @@ def _parse_tool_arguments(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     return json.loads(raw_arguments)
 
 
+def _source_filter_from_context(context: Dict[str, Any]) -> List[str]:
+    """Return the validated source filter selected outside the model."""
+    raw_sources = context.get("source_filter")
+    if not isinstance(raw_sources, list):
+        return []
+
+    selected: List[str] = []
+    for source in raw_sources:
+        normalized = str(source or "").strip()
+        if normalized in RESEARCH_SOURCE_IDS and normalized not in selected:
+            selected.append(normalized)
+    return selected
+
+
+def _apply_source_filter(arguments: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Force run_research to honor a user-selected source filter."""
+    selected_sources = _source_filter_from_context(context)
+    if not selected_sources:
+        return arguments
+    return {**arguments, "sources": selected_sources}
+
+
 def _missing_scope(arguments: Dict[str, Any]) -> List[str]:
     """Return missing scope fields that would make research unsafe to execute."""
     missing: List[str] = []
@@ -241,6 +273,7 @@ async def dispatch_tool_call(
         }
 
     if name == "run_research":
+        arguments = _apply_source_filter(arguments, context)
         missing = _missing_scope(arguments)
         if missing:
             return {

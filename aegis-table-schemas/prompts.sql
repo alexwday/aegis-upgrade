@@ -87,4 +87,3 @@ ALTER TABLE ONLY public.prompts
 --
 -- PostgreSQL database dump complete
 --
-

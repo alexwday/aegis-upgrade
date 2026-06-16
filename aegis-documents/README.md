@@ -15,6 +15,7 @@ aegis-documents/
   pillar3/
     2026_Q1/<BANK-REGION>/*
   transcripts/
+  event_transcripts/
 ```
 
 `BANK-REGION` folder names are the canonical bank identifiers used downstream,
