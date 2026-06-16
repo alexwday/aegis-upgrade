@@ -184,54 +184,70 @@ def upsert_prompts(conn: psycopg2.extensions.connection, prompts: Iterable[dict[
     count = 0
     with conn.cursor() as cur:
         for prompt in prompts:
+            params = prompt_params(prompt)
             cur.execute(
                 """
-                INSERT INTO prompts (
-                    model,
-                    layer,
-                    name,
-                    description,
-                    comments,
-                    system_prompt,
-                    user_prompt,
-                    tool_definition,
-                    uses_global,
-                    version,
-                    created_at,
-                    updated_at
-                )
-                VALUES (
-                    %(model)s,
-                    %(layer)s,
-                    %(name)s,
-                    %(description)s,
-                    %(comments)s,
-                    %(system_prompt)s,
-                    %(user_prompt)s,
-                    %(tool_definition)s,
-                    %(uses_global)s,
-                    %(version)s,
-                    CURRENT_TIMESTAMP,
-                    CURRENT_TIMESTAMP
-                )
-                ON CONFLICT (model, layer, name, version) DO UPDATE SET
-                    description = EXCLUDED.description,
-                    comments = EXCLUDED.comments,
-                    system_prompt = EXCLUDED.system_prompt,
-                    user_prompt = EXCLUDED.user_prompt,
-                    tool_definition = EXCLUDED.tool_definition,
-                    uses_global = EXCLUDED.uses_global,
+                UPDATE public.prompts
+                SET
+                    description = %(description)s,
+                    comments = %(comments)s,
+                    system_prompt = %(system_prompt)s,
+                    user_prompt = %(user_prompt)s,
+                    tool_definition = %(tool_definition)s,
+                    uses_global = %(uses_global)s,
                     updated_at = CURRENT_TIMESTAMP
+                WHERE model = %(model)s
+                  AND layer = %(layer)s
+                  AND name = %(name)s
+                  AND version = %(version)s
                 """,
-                {
-                    **prompt,
-                    "tool_definition": Json(prompt["tool_definition"])
-                    if prompt["tool_definition"] is not None
-                    else None,
-                },
+                params,
             )
+            if cur.rowcount == 0:
+                cur.execute(
+                    """
+                    INSERT INTO public.prompts (
+                        model,
+                        layer,
+                        name,
+                        description,
+                        comments,
+                        system_prompt,
+                        user_prompt,
+                        tool_definition,
+                        uses_global,
+                        version,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        %(model)s,
+                        %(layer)s,
+                        %(name)s,
+                        %(description)s,
+                        %(comments)s,
+                        %(system_prompt)s,
+                        %(user_prompt)s,
+                        %(tool_definition)s,
+                        %(uses_global)s,
+                        %(version)s,
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP
+                    )
+                    """,
+                    params,
+                )
             count += 1
     return count
+
+
+def prompt_params(prompt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **prompt,
+        "tool_definition": Json(prompt["tool_definition"])
+        if prompt["tool_definition"] is not None
+        else None,
+    }
 
 
 if __name__ == "__main__":
