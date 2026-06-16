@@ -936,21 +936,45 @@ def _summarize_section_batch(
         toc_context,
         prompt,
     )
-    return _call_with_retry(
-        client=client,
-        messages=[
-            {"role": "system", "content": prompt["system_prompt"]},
-            {"role": "user", "content": user_message},
-        ],
-        prompt=prompt,
-        parser=_parse_section_summary_response,
-        retry_config=retry_config,
-        context=context,
-        validator=lambda parsed, expected=batch: _validate_section_results(
-            expected,
-            parsed,
-        ),
-    )
+    try:
+        return _call_with_retry(
+            client=client,
+            messages=[
+                {"role": "system", "content": prompt["system_prompt"]},
+                {"role": "user", "content": user_message},
+            ],
+            prompt=prompt,
+            parser=_parse_section_summary_response,
+            retry_config=retry_config,
+            context=context,
+            validator=lambda parsed, expected=batch: _validate_section_results(
+                expected,
+                parsed,
+            ),
+        )
+    except ValueError as exc:
+        if len(batch) == 1 or "section summary ids mismatch" not in str(exc):
+            raise
+        midpoint = len(batch) // 2
+        first_half = _summarize_section_batch(
+            batch=batch[:midpoint],
+            document=document,
+            client=client,
+            prompt=prompt,
+            retry_config=retry_config,
+            context=f"{context}:split_1",
+            toc_context=toc_context,
+        )
+        second_half = _summarize_section_batch(
+            batch=batch[midpoint:],
+            document=document,
+            client=client,
+            prompt=prompt,
+            retry_config=retry_config,
+            context=f"{context}:split_2",
+            toc_context=toc_context,
+        )
+        return {**first_half, **second_half}
 
 
 def _format_doc_metadata_input(
