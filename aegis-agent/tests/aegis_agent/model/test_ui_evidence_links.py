@@ -34,11 +34,10 @@ def test_chat_template_keeps_research_trace_below_evidence() -> None:
     template = Path(__file__).resolve().parents[3] / "templates" / "chat.html"
     html = template.read_text(encoding="utf-8")
 
-    assert "function collapseStatusTrace" in html
-    assert "function moveStatusTraceIntoResponse" in html
-    assert "trace-stack empty" in html
-    assert "responseFrame.append(main, evidence, trace)" in html
-    assert "Research trace" in html
+    assert "function removeStatusTrace" in html
+    assert "responseFrame.append(main, evidence)" in html
+    assert "turn.evidence.appendChild(panel)" in html
+    assert "className = \"evidence-stack empty\"" in html
     assert "reasoning-tab" not in html
     assert "ensureReasoningTab" not in html
     assert "Reasoning" not in html
@@ -84,11 +83,11 @@ def test_chat_template_uses_single_research_status_snapshot_board() -> None:
     assert 'event.type === "research_status_snapshot"' in html
     assert "function renderResearchStatusSnapshot" in html
     assert "function ensureResearchStatusBoard" in html
-    assert "function renderCompletedResearchSummaries" in html
-    assert "research-source-strip" in html
-    assert "research-summary-list" in html
+    assert "function indexCompletedResearchSummaries" in html
+    assert "research-status-board" in html
+    assert "research-status-table" in html
     assert "research-summary-body" in html
-    assert "Completed source summaries" in html
+    assert "completed_summaries" in html
     assert "Current step" not in html
 
 
@@ -114,3 +113,19 @@ def test_chat_template_keeps_choice_cards_compact_and_completes_status() -> None
     assert "function completeChoiceTurn" in html
     assert "completeChoiceTurn(turn)" in html
     assert 'turn.statusText.textContent = "Selection received"' in html
+
+
+def test_chat_template_renders_json_chart_artifacts_without_images() -> None:
+    """Inline charts should hydrate from structured JSON specs, not image asset URLs."""
+    template = Path(__file__).resolve().parents[3] / "templates" / "chat.html"
+    html = template.read_text(encoding="utf-8")
+
+    assert 'event.type === "chart_artifact"' in html
+    assert "function mergeChartArtifact" in html
+    assert "function renderChartGraphic" in html
+    assert "function renderPeerBarChart" in html
+    assert "function renderTrendLineChart" in html
+    assert "function renderHeatmapChart" in html
+    assert "chartArtifacts: {}" in html
+    assert "asset_url" not in html
+    assert "<img src=" not in html

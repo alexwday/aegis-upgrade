@@ -11,11 +11,13 @@ from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
 from ...connections.llm_connector import stream_with_tools
 from ...utils.logging import get_logger
 from ...utils.prompt_loader import load_prompt_from_db
-from .schemas import DEFAULT_DOCUMENT_SOURCES
+from .schemas import DEFAULT_DOCUMENT_SOURCES, FinalResponseShell
 from .tools import AGENT_TOOLS, dispatch_tool_call
 
 
 MAX_AGENT_LOOPS = 6
+FINAL_SHELL_OPEN = "<aegis_final_shell>"
+FINAL_SHELL_CLOSE = "</aegis_final_shell>"
 
 SOURCE_LABELS = {
     "transcripts": "transcripts",
@@ -78,6 +80,28 @@ def _source_scope_message(context: Dict[str, Any]) -> str:
     )
 
 
+def _final_response_protocol_message(context: Dict[str, Any]) -> str:
+    """Build dynamic final-answer streaming instructions."""
+    chart_instruction = str(context.get("chart_instruction") or "").strip()
+    if not chart_instruction:
+        chart_instruction = (
+            "No backend-approved chart options are available yet. Do not include chart markers."
+        )
+    return (
+        "Final response streaming protocol: after research is complete, do not call "
+        "start_final_response for normal final answers. Instead, begin the final assistant "
+        f"message with `{FINAL_SHELL_OPEN}` followed by a single JSON object matching the "
+        "final response shell schema, then "
+        f"`{FINAL_SHELL_CLOSE}`, then immediately continue with the markdown body. "
+        "The shell JSON must contain render_mode, summary, tiles, and body_style. "
+        "Use render_mode default_brief and body_style default_brief for the default "
+        "research brief; use custom/user_requested_format when the user requested a "
+        "specific format; use no_available_data/user_requested_format when no data is available. "
+        "Do not wrap the body in JSON or code fences. "
+        f"{chart_instruction}"
+    )
+
+
 def _messages_for_agent(
     conversation_messages: Iterable[Dict[str, str]],
     context: Dict[str, Any],
@@ -86,6 +110,7 @@ def _messages_for_agent(
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": _load_system_prompt()},
         {"role": "system", "content": _source_scope_message(context)},
+        {"role": "system", "content": _final_response_protocol_message(context)},
     ]
     for message in conversation_messages:
         role = message.get("role")
@@ -115,10 +140,12 @@ async def _stream_model_step(
     messages: List[Dict[str, Any]],
     context: Dict[str, Any],
     stream_content: bool = False,
+    parse_final_shell: bool = False,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """Stream one model step and yield events plus the accumulated assistant message."""
     content_parts: List[str] = []
     tool_calls_by_index: Dict[int, Dict[str, Any]] = {}
+    shell_parser = _FinalShellStreamParser() if parse_final_shell else None
 
     async for chunk in stream_with_tools(
         messages=messages,
@@ -133,7 +160,13 @@ async def _stream_model_step(
         if content_delta:
             content_parts.append(content_delta)
             if stream_content:
-                yield {"event": {"type": "agent", "name": "aegis", "content": content_delta}}
+                if shell_parser is not None:
+                    for event in shell_parser.push(content_delta):
+                        yield {"event": event}
+                else:
+                    yield {"event": {"type": "agent", "name": "aegis", "content": content_delta}}
+        async for event in _drain_ready_background_events(context):
+            yield {"event": event}
 
         for tool_delta in delta.get("tool_calls") or []:
             index = int(tool_delta.get("index", 0))
@@ -160,8 +193,110 @@ async def _stream_model_step(
         assistant_message["tool_calls"] = tool_calls
     elif content_parts and not stream_content:
         yield {"event": {"type": "agent", "name": "aegis", "content": "".join(content_parts)}}
+    elif stream_content and shell_parser is not None:
+        for event in shell_parser.finish():
+            yield {"event": event}
 
     yield {"assistant_message": assistant_message}
+
+
+class _FinalShellStreamParser:
+    """Parse an optional leading final shell block from streamed content."""
+
+    def __init__(self) -> None:
+        self.buffer = ""
+        self.started = False
+        self.done = False
+
+    def push(self, content_delta: str) -> List[Dict[str, Any]]:
+        """Return websocket events produced by one final-answer content delta."""
+        if self.done:
+            return [{"type": "agent", "name": "aegis", "content": content_delta}]
+
+        self.buffer += content_delta
+        stripped = self.buffer.lstrip()
+        if not stripped:
+            return []
+
+        if not self.started:
+            if FINAL_SHELL_OPEN.startswith(stripped):
+                return []
+            if not stripped.startswith(FINAL_SHELL_OPEN):
+                self.done = True
+                fallback = self.buffer
+                self.buffer = ""
+                return [
+                    {
+                        "type": "final_response_start",
+                        "name": "aegis",
+                        "content": _default_final_shell(),
+                    },
+                    {"type": "agent", "name": "aegis", "content": fallback},
+                ]
+            self.started = True
+
+        close_index = stripped.find(FINAL_SHELL_CLOSE)
+        if close_index < 0:
+            return []
+
+        shell_text = stripped[len(FINAL_SHELL_OPEN) : close_index].strip()
+        body_text = stripped[close_index + len(FINAL_SHELL_CLOSE) :]
+        self.done = True
+        self.buffer = ""
+        events = [
+            {
+                "type": "final_response_start",
+                "name": "aegis",
+                "content": _parse_final_shell_payload(shell_text),
+            }
+        ]
+        if body_text:
+            events.append({"type": "agent", "name": "aegis", "content": body_text})
+        return events
+
+    def finish(self) -> List[Dict[str, Any]]:
+        """Flush any buffered text when the model ends without a complete shell."""
+        if self.done or not self.buffer:
+            return []
+        fallback = self.buffer
+        self.buffer = ""
+        self.done = True
+        return [
+            {
+                "type": "final_response_start",
+                "name": "aegis",
+                "content": _default_final_shell(),
+            },
+            {"type": "agent", "name": "aegis", "content": fallback},
+        ]
+
+
+def _parse_final_shell_payload(raw_shell: str) -> Dict[str, Any]:
+    """Parse and validate the streamed final shell JSON."""
+    try:
+        shell = FinalResponseShell.model_validate(json.loads(raw_shell))
+        return shell.model_dump(mode="json")
+    except Exception:  # pylint: disable=broad-exception-caught
+        return _default_final_shell()
+
+
+def _default_final_shell() -> Dict[str, Any]:
+    """Return a conservative final response shell for parser fallback."""
+    return {
+        "render_mode": "custom",
+        "summary": None,
+        "tiles": [],
+        "body_style": "user_requested_format",
+    }
+
+
+async def _drain_ready_background_events(context: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+    """Yield background chart events already available without blocking streaming."""
+    queue = context.get("background_event_queue")
+    if queue is None:
+        return
+    while not queue.empty():
+        yield queue.get_nowait()
 
 
 async def _drain_tool_events(
@@ -221,8 +356,10 @@ async def run_aegis_agent(
     feeds structured tool results back to the model, and streams UI events.
     """
     logger = get_logger()
+    context.setdefault("background_event_queue", asyncio.Queue())
     messages = _messages_for_agent(conversation_messages, context)
     final_response_started = False
+    final_stream_allowed = False
 
     for loop_index in range(MAX_AGENT_LOOPS):
         logger.info(
@@ -235,7 +372,8 @@ async def run_aegis_agent(
         async for item in _stream_model_step(
             messages,
             context,
-            stream_content=final_response_started,
+            stream_content=final_response_started or final_stream_allowed,
+            parse_final_shell=final_stream_allowed and not final_response_started,
         ):
             if "event" in item:
                 yield item["event"]
@@ -245,6 +383,8 @@ async def run_aegis_agent(
         tool_calls = assistant_message.get("tool_calls") or []
 
         if not tool_calls:
+            async for event in _drain_ready_background_events(context):
+                yield event
             return
 
         messages.append(assistant_message)
@@ -254,16 +394,22 @@ async def run_aegis_agent(
             if "event" in item:
                 if item["event"].get("type") == "final_response_start":
                     final_response_started = True
+                    final_stream_allowed = False
                 yield item["event"]
             else:
                 tool_results.append(item)
 
         awaiting_user = False
+        research_completed = False
         for item in tool_results:
             tool_call = item["tool_call"]
             result = item["result"]
             if result.get("status") == "awaiting_user":
                 awaiting_user = True
+            if tool_call.get("function", {}).get("name") == "run_research" and result.get(
+                "status"
+            ) not in {"needs_clarification", "error"}:
+                research_completed = True
             messages.append(
                 {
                     "role": "tool",
@@ -274,6 +420,10 @@ async def run_aegis_agent(
 
         if awaiting_user:
             return
+
+        if research_completed and not final_response_started:
+            final_stream_allowed = True
+            messages.append({"role": "system", "content": _final_response_protocol_message(context)})
 
     yield {
         "type": "error",

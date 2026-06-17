@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from aegis_agent.model.agents.tools import dispatch_tool_call, is_research_scope_complete
+from aegis_agent.model.agents.tools import AGENT_TOOLS, dispatch_tool_call, is_research_scope_complete
 from aegis_agent.model.agents.schemas import DEFAULT_DOCUMENT_SOURCES, ResearchRequest
 
 
@@ -33,6 +33,13 @@ def test_research_request_default_sources_include_transcript_sources() -> None:
     assert request.sources == DEFAULT_DOCUMENT_SOURCES
     assert "transcripts" in request.sources
     assert "event_transcripts" in request.sources
+
+
+def test_final_response_tool_is_not_exposed_to_live_model() -> None:
+    """The live model should stream the shell inline instead of making a tool round trip."""
+    tool_names = {tool["function"]["name"] for tool in AGENT_TOOLS}
+
+    assert "start_final_response" not in tool_names
 
 
 @pytest.mark.asyncio

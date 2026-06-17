@@ -176,6 +176,7 @@ class ResearchResult(BaseModel):
     gaps: List[Gap] = Field(default_factory=list)
     coverage: List[CoverageItem] = Field(default_factory=list)
     dropdown_markdown: str = ""
+    chart_options: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class FinalResponseSummary(BaseModel):

@@ -18,6 +18,7 @@ from ...connections.postgres_connector import get_connection
 from ...utils.logging import get_logger
 from ...utils.monitor import add_monitor_entry
 from ...utils.settings import config
+from .charts import build_chart_options, chart_instruction_text, publish_chart_artifacts
 from .progress import ResearchProgressStore, emit_event
 from .schemas import (
     BankPeriodCombination,
@@ -1071,7 +1072,7 @@ def _aggregate_results(results: Sequence[ResearchResult]) -> ResearchResult:
         citation for citation in citations if str(citation.source_id or "") not in SOURCE_LABELS
     ]
 
-    return ResearchResult(
+    aggregate = ResearchResult(
         status=status,
         quick_summary=quick_summary,
         findings=findings,
@@ -1081,6 +1082,10 @@ def _aggregate_results(results: Sequence[ResearchResult]) -> ResearchResult:
         coverage=coverage,
         dropdown_markdown="\n\n".join(dropdowns),
     )
+    aggregate.chart_options = [
+        option.model_dump(mode="json") for option in build_chart_options(aggregate.findings)
+    ]
+    return aggregate
 
 
 async def _run_one_source(
@@ -1229,6 +1234,12 @@ async def run_research_tool(
             for source, result in zip(request.sources, gathered_results)
         ]
         result = _aggregate_results(source_results)
+        chart_options = build_chart_options(result.findings)
+        result.chart_options = [
+            option.model_dump(mode="json") for option in chart_options
+        ]
+        context["chart_instruction"] = chart_instruction_text(chart_options)
+        publish_chart_artifacts(chart_options, context)
         source_dropdowns = [
             _format_source_result_dropdown(source, source_result)
             for source, source_result in zip(request.sources, source_results)

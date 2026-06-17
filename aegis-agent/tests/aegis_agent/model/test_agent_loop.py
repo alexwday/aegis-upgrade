@@ -251,3 +251,78 @@ async def test_agent_research_shell_then_streams_body(monkeypatch) -> None:
     assert events[0]["content"]["summary"]["headline"] == "RBC CET1 was solid"
     assert "RBC reported CET1" in events[1]["content"]
     assert "[[E1]]" in events[2]["content"]
+
+
+@pytest.mark.asyncio
+async def test_agent_streams_inline_shell_without_final_tool_call(monkeypatch) -> None:
+    """After research, the final shell can stream inline with the body content."""
+    calls = 0
+
+    async def fake_stream_with_tools(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "research-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "run_research",
+                                        "arguments": (
+                                            '{"question":"CET1 capital",'
+                                            '"sources":["investor_slides"],'
+                                            '"combinations":[{"bank_symbol":"RY-CA",'
+                                            '"fiscal_year":2026,"quarter":"Q1"}]}'
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+            return
+        shell = (
+            '<aegis_final_shell>{"render_mode":"default_brief",'
+            '"body_style":"default_brief",'
+            '"summary":{"headline":"RBC CET1 was solid"},'
+            '"tiles":[{"label":"CET1","value":"13.2%","evidence_ids":["E1"]}]}'
+            "</aegis_final_shell>"
+        )
+        yield {"choices": [{"delta": {"content": shell[:28]}}]}
+        yield {"choices": [{"delta": {"content": shell[28:] + "RBC reported CET1 strength "}}]}
+        yield {"choices": [{"delta": {"content": "supported by disclosures. [[E1]]"}}]}
+
+    async def fake_run_research_tool(*_args, **_kwargs):
+        return {"status": "success", "quick_summary": "Research complete", "findings": []}
+
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.aegis_agent.stream_with_tools",
+        fake_stream_with_tools,
+    )
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.tools.run_research_tool",
+        fake_run_research_tool,
+    )
+
+    events = [
+        event
+        async for event in run_aegis_agent(
+            [{"role": "user", "content": "Using investor slides, summarize RBC Q1 2026 CET1."}],
+            {"execution_id": "test"},
+        )
+    ]
+
+    assert [event["type"] for event in events] == [
+        "final_response_start",
+        "agent",
+        "agent",
+    ]
+    assert events[0]["content"]["summary"]["headline"] == "RBC CET1 was solid"
+    assert events[1]["content"] == "RBC reported CET1 strength "
+    assert events[2]["content"] == "supported by disclosures. [[E1]]"

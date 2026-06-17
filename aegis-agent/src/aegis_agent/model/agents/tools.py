@@ -118,67 +118,6 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "start_final_response",
-            "description": (
-                "Declare the final response layout before streaming final prose. "
-                "Call this after research is complete and before writing the answer body."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "render_mode": {
-                        "type": "string",
-                        "enum": ["default_brief", "custom", "no_available_data"],
-                    },
-                    "summary": {
-                        "anyOf": [
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "headline": {"type": "string"},
-                                    "dek": {"type": "string"},
-                                    "eyebrow": {"type": "string"},
-                                },
-                                "required": ["headline"],
-                                "additionalProperties": False,
-                            },
-                            {"type": "null"},
-                        ],
-                        "default": None,
-                    },
-                    "tiles": {
-                        "type": "array",
-                        "maxItems": 4,
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "label": {"type": "string"},
-                                "value": {"type": "string"},
-                                "context": {"type": "string"},
-                                "evidence_ids": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                    "default": [],
-                                },
-                            },
-                            "required": ["label", "value"],
-                            "additionalProperties": False,
-                        },
-                        "default": [],
-                    },
-                    "body_style": {
-                        "type": "string",
-                        "enum": ["default_brief", "user_requested_format"],
-                    },
-                },
-                "required": ["render_mode", "body_style"],
-                "additionalProperties": False,
-            },
-        },
-    },
 ]
 
 
