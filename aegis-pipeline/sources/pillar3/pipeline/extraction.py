@@ -516,6 +516,21 @@ def _open_workbooks(file_path: Path) -> tuple[Any, Any]:
             category=UserWarning,
             module="openpyxl.reader.workbook",
         )
+        warnings.filterwarnings(
+            "ignore",
+            message=(
+                "DrawingML support is incomplete and limited to charts and images "
+                "only. Shapes and drawings will be lost."
+            ),
+            category=UserWarning,
+            module="openpyxl.reader.drawings",
+        )
+        warnings.filterwarnings(
+            "ignore",
+            message="wmf image format is not supported so the image is being dropped",
+            category=UserWarning,
+            module="openpyxl.reader.drawings",
+        )
         try:
             workbook = load_workbook(filename=file_path, data_only=False)
         except (OSError, ValueError) as exc:
