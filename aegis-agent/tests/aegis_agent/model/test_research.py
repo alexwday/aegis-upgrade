@@ -402,24 +402,27 @@ async def test_run_research_summarizes_completed_source_while_others_continue(
         ):
             if source == "rts":
                 await slow_release.wait()
-            combo = bank_period_combinations[0]
-            return {
-                "combo_results": [
+            combo_results = []
+            for combo in bank_period_combinations:
+                symbol = combo.get("bank_symbol", "bank")
+                combo_results.append(
                     {
                         "combo": combo,
                         "findings": [
                             {
-                                "finding": f"{source} interim finding for {query_text}.",
+                                "finding": f"{source} interim finding for {symbol} and {query_text}.",
                                 "finding_type": "summary",
                                 "page": 1,
                                 "location_detail": "Capital",
                                 "source_ref_ids": ["S1"],
                             }
                         ],
-                        "expanded_chunks": [{"name": "Capital", "chunk_id": f"{source}_p1"}],
+                        "expanded_chunks": [{"name": "Capital", "chunk_id": f"{source}_{symbol}_p1"}],
                         "reranked_chunks": [],
                     }
-                ],
+                )
+            return {
+                "combo_results": combo_results,
                 "chunks": [],
                 "findings": [],
                 "prepared_query": {
@@ -443,7 +446,10 @@ async def test_run_research_summarizes_completed_source_while_others_continue(
             {
                 "question": "capital",
                 "sources": ["investor_slides", "rts"],
-                "combinations": [{"bank_symbol": "RY-CA", "fiscal_year": 2026, "quarter": "Q1"}],
+                "combinations": [
+                    {"bank_symbol": "RY-CA", "fiscal_year": 2026, "quarter": "Q1"},
+                    {"bank_symbol": "TD-CA", "fiscal_year": 2026, "quarter": "Q1"},
+                ],
             },
             {"execution_id": "test"},
             queue,
@@ -468,8 +474,21 @@ async def test_run_research_summarizes_completed_source_while_others_continue(
         )
         assert investor_summary["quick_summary"].startswith("Investor slides research produced")
         assert investor_summary["summary_text"].startswith("RY-CA Q1 2026:")
-        assert "investor_slides interim finding for capital" in investor_summary["summary_text"]
-        assert investor_summary["finding_count"] == 1
+        assert "TD-CA Q1 2026:" in investor_summary["summary_text"]
+        assert "investor_slides interim finding for RY-CA and capital" in investor_summary["summary_text"]
+        assert investor_summary["combo_summaries"] == [
+            {
+                "combo_label": "RY-CA Q1 2026",
+                "summary": "investor_slides interim finding for RY-CA and capital.",
+                "status": "complete",
+            },
+            {
+                "combo_label": "TD-CA Q1 2026",
+                "summary": "investor_slides interim finding for TD-CA and capital.",
+                "status": "complete",
+            },
+        ]
+        assert investor_summary["finding_count"] == 2
         rows = {row["source_id"]: row for row in summary_event["content"]["rows"]}
         assert rows["investor_slides"]["status"] == "complete"
         assert rows["rts"]["status"] in {"pending", "checking", "in_progress"}

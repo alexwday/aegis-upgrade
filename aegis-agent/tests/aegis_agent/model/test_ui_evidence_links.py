@@ -84,6 +84,10 @@ def test_chat_template_uses_single_research_status_snapshot_board() -> None:
     assert "function renderResearchStatusSnapshot" in html
     assert "function ensureResearchStatusBoard" in html
     assert "function indexCompletedResearchSummaries" in html
+    assert "snapshot?.headline" in html
+    assert "researchSnapshotStarted" in html
+    assert "!options.research || !turn.researchSnapshotStarted" in html
+    assert '`${completedSources}/${totalSources} sources`' in html
     assert "research-status-board" in html
     assert "research-status-table" in html
     assert "research-summary-body" in html
@@ -124,8 +128,25 @@ def test_chat_template_renders_json_chart_artifacts_without_images() -> None:
     assert "function mergeChartArtifact" in html
     assert "function renderChartGraphic" in html
     assert "function renderPeerBarChart" in html
+    assert "function renderPeerRankBarChart" in html
     assert "function renderTrendLineChart" in html
+    assert "function renderMultiSeriesLineChart" in html
+    assert "function renderSlopegraphChart" in html
+    assert "function renderDeltaBarChart" in html
     assert "function renderHeatmapChart" in html
+    assert "function renderCompositionChart" in html
+    assert "function renderWaterfallChart" in html
+    assert "function renderScatterPlotChart" in html
+    assert "function renderSmallMultiplePanelChart" in html
+    assert 'artifact.spec.chart_type === "peer_rank_bar"' in html
+    assert 'artifact.spec.chart_type === "multi_series_line"' in html
+    assert 'artifact.spec.chart_type === "slopegraph"' in html
+    assert 'artifact.spec.chart_type === "delta_bar"' in html
+    assert 'artifact.spec.chart_type === "composition_stacked_bar"' in html
+    assert 'artifact.spec.chart_type === "waterfall"' in html
+    assert 'artifact.spec.chart_type === "scatter_plot"' in html
+    assert 'artifact.spec.chart_type === "small_multiple_panel"' in html
+    assert 'artifact.spec.chart_type === "trend_bar"' in html
     assert "chartArtifacts: {}" in html
     assert "asset_url" not in html
     assert "<img src=" not in html

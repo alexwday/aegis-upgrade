@@ -6,11 +6,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
+from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional
 
 from ...connections.llm_connector import stream_with_tools
 from ...utils.logging import get_logger
 from ...utils.prompt_loader import load_prompt_from_db
+from .charts import chart_instruction_text_from_artifacts
 from .schemas import DEFAULT_DOCUMENT_SOURCES, FinalResponseShell
 from .tools import AGENT_TOOLS, dispatch_tool_call
 
@@ -85,7 +86,8 @@ def _final_response_protocol_message(context: Dict[str, Any]) -> str:
     chart_instruction = str(context.get("chart_instruction") or "").strip()
     if not chart_instruction:
         chart_instruction = (
-            "No backend-approved chart options are available yet. Do not include chart markers."
+            "No backend-approved chart options are available yet. Do not include chart "
+            "markers and do not create ad hoc markdown charts."
         )
     return (
         "Final response streaming protocol: after research is complete, do not call "
@@ -118,6 +120,63 @@ def _messages_for_agent(
         if role in {"user", "assistant"} and isinstance(content, str) and content.strip():
             messages.append({"role": role, "content": content})
     return messages
+
+
+def _ready_prior_chart_artifacts(context: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Return ready chart artifacts carried over from the previous research turn."""
+    raw_artifacts = context.get("prior_chart_artifacts")
+    if not isinstance(raw_artifacts, Mapping):
+        return {}
+
+    artifacts: Dict[str, Dict[str, Any]] = {}
+    for raw_chart_id, raw_artifact in raw_artifacts.items():
+        if not isinstance(raw_artifact, Mapping):
+            continue
+        chart_id = str(raw_artifact.get("chart_id") or raw_chart_id).strip()
+        if not chart_id or str(raw_artifact.get("status") or "ready") != "ready":
+            continue
+        artifacts[chart_id] = dict(raw_artifact)
+    return artifacts
+
+
+def _prime_prior_chart_context(context: Dict[str, Any]) -> None:
+    """Make prior approved charts available to follow-up turns."""
+    artifacts = _ready_prior_chart_artifacts(context)
+    if not artifacts:
+        return
+
+    if not str(context.get("chart_instruction") or "").strip():
+        context["chart_instruction"] = chart_instruction_text_from_artifacts(artifacts)
+    current_artifacts: Dict[str, Dict[str, Any]] = context.setdefault("chart_artifacts", {})
+    current_artifacts.update(artifacts)
+
+    event_queue: Optional[asyncio.Queue] = context.get("background_event_queue")
+    if event_queue is None:
+        return
+
+    prior_registry = context.get("prior_evidence_registry")
+    if isinstance(prior_registry, Mapping):
+        event_queue.put_nowait(
+            {
+                "type": "agent_status",
+                "name": "aegis",
+                "content": "Evidence registry ready.",
+                "metadata": {
+                    "evidence_registry": dict(prior_registry),
+                    "internal": True,
+                    "reused_evidence_registry": True,
+                },
+            }
+        )
+
+    for artifact in artifacts.values():
+        event_queue.put_nowait(
+            {
+                "type": "chart_artifact",
+                "name": "aegis",
+                "content": artifact,
+            }
+        )
 
 
 def _tool_call_from_delta(existing: Dict[str, Any], delta: Dict[str, Any]) -> Dict[str, Any]:
@@ -357,9 +416,13 @@ async def run_aegis_agent(
     """
     logger = get_logger()
     context.setdefault("background_event_queue", asyncio.Queue())
+    _prime_prior_chart_context(context)
     messages = _messages_for_agent(conversation_messages, context)
     final_response_started = False
     final_stream_allowed = False
+
+    async for event in _drain_ready_background_events(context):
+        yield event
 
     for loop_index in range(MAX_AGENT_LOOPS):
         logger.info(

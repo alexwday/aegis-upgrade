@@ -111,6 +111,8 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
     """Handle one websocket chat session."""
     await websocket.accept()
     conversation_state: Dict[str, List[Dict[str, str]]] = {"messages": []}
+    session_chart_artifacts: Dict[str, Dict[str, Any]] = {}
+    session_evidence_registry: Dict[str, Dict[str, Any]] = {}
     await websocket.send_json({"type": "status", "name": "system", "content": "Connected"})
 
     try:
@@ -135,14 +137,29 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
             assistant_parts: List[str] = []
             latest_card_question = ""
 
-            async for event in model(conversation_state, source_filter=source_filter):
+            async for event in model(
+                conversation_state,
+                source_filter=source_filter,
+                prior_chart_artifacts=dict(session_chart_artifacts),
+                prior_evidence_registry=dict(session_evidence_registry),
+            ):
                 await websocket.send_json(event)
                 event_type = event.get("type")
                 content = event.get("content")
+                metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
                 if event_type == "agent" and isinstance(content, str):
                     assistant_parts.append(content)
                 elif event_type == "ui_card" and isinstance(content, dict):
                     latest_card_question = str(content.get("question") or "")
+                elif event_type == "chart_artifact" and isinstance(content, dict):
+                    chart_id = str(content.get("chart_id") or "").strip()
+                    if chart_id:
+                        session_chart_artifacts[chart_id] = content
+
+                evidence_registry = metadata.get("evidence_registry")
+                if isinstance(evidence_registry, dict) and metadata.get("research_result") is True:
+                    session_chart_artifacts = {}
+                    session_evidence_registry = evidence_registry
 
             if assistant_parts:
                 conversation_state["messages"].append(

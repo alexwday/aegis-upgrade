@@ -326,3 +326,67 @@ async def test_agent_streams_inline_shell_without_final_tool_call(monkeypatch) -
     assert events[0]["content"]["summary"]["headline"] == "RBC CET1 was solid"
     assert events[1]["content"] == "RBC reported CET1 strength "
     assert events[2]["content"] == "supported by disclosures. [[E1]]"
+
+
+@pytest.mark.asyncio
+async def test_agent_republishes_prior_chart_artifacts_for_followup(monkeypatch) -> None:
+    """A follow-up chart request should have prior chart specs available to hydrate."""
+    captured_messages = []
+
+    async def fake_stream_with_tools(messages, *_args, **_kwargs):
+        captured_messages.extend(messages)
+        yield {"choices": [{"delta": {"content": "[[CHART:C2]]"}}]}
+
+    prior_chart = {
+        "chart_id": "C2",
+        "chart_type": "trend_bar",
+        "title": "RY-CA CET1 ratio by period",
+        "subtitle": "Q1 2026 to Q3 2026 | %",
+        "alt_text": "RY-CA CET1 ratio by period.",
+        "status": "ready",
+        "evidence_ids": ["E1"],
+        "spec": {
+            "chart_type": "trend_bar",
+            "metric_name": "CET1 ratio",
+            "unit": "%",
+            "x_label": "Period",
+            "y_label": "%",
+            "facts": [],
+        },
+    }
+
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.aegis_agent.stream_with_tools",
+        fake_stream_with_tools,
+    )
+
+    events = [
+        event
+        async for event in run_aegis_agent(
+            [
+                {"role": "assistant", "content": "I can also show a bar chart."},
+                {"role": "user", "content": "yes create the bar graph"},
+            ],
+            {
+                "execution_id": "test",
+                "prior_chart_artifacts": {"C2": prior_chart},
+                "prior_evidence_registry": {
+                    "investor_slides": {"E1": {"display_label": "Slide 1"}}
+                },
+            },
+        )
+    ]
+
+    assert [event["type"] for event in events] == [
+        "agent_status",
+        "chart_artifact",
+        "agent",
+    ]
+    assert events[0]["metadata"]["reused_evidence_registry"] is True
+    assert events[1]["content"]["chart_id"] == "C2"
+    assert events[2]["content"] == "[[CHART:C2]]"
+    assert any(
+        "Previously approved interactive chart options" in str(message.get("content"))
+        and '"chart_id": "C2"' in str(message.get("content"))
+        for message in captured_messages
+    )

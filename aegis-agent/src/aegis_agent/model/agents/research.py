@@ -808,6 +808,71 @@ def _source_status_summary_text(
     return _compact_text(result.quick_summary, 420)
 
 
+def _source_combo_summaries(source: str, result: ResearchResult) -> List[Dict[str, str]]:
+    """Build one compact status summary per bank-period combination."""
+    source_label = _source_label(source)
+    combo_entries: Dict[str, Dict[str, Any]] = {}
+
+    def ensure_entry(combo_label: str, status: str = "complete") -> Dict[str, Any]:
+        label = _strip_source_prefix(source_label, combo_label)
+        entry = combo_entries.setdefault(
+            label,
+            {
+                "combo_label": label,
+                "summary": "",
+                "status": status,
+                "_priority": 0,
+            },
+        )
+        if status and entry.get("status") in {"pending", "complete"}:
+            entry["status"] = status
+        return entry
+
+    for item in result.coverage:
+        ensure_entry(item.combo_label, item.status)
+
+    for finding in result.findings:
+        entry = ensure_entry(finding.combo_label, "complete")
+        text = f"{finding.summary}{_status_metric_text(finding.metric)}"
+        if finding.details:
+            text = f"{text} Details: {finding.details}"
+        if finding.table:
+            table_label = finding.table.title or "table returned"
+            text = f"{text} Includes {table_label}."
+        priority = 2 if finding.finding_type == "summary" else 1
+        if priority > int(entry.get("_priority", 0)):
+            entry["summary"] = _compact_text(text, 260)
+            entry["_priority"] = priority
+
+    for gap in result.gaps:
+        entry = ensure_entry(gap.combo_label, "incomplete")
+        if not entry.get("summary"):
+            entry["summary"] = _compact_text(gap.reason, 260)
+
+    for entry in combo_entries.values():
+        if entry.get("summary"):
+            continue
+        status = str(entry.get("status") or "")
+        if status == "complete":
+            entry["summary"] = "Research completed."
+        elif status == "error":
+            entry["summary"] = "Research failed."
+        elif status == "unavailable":
+            entry["summary"] = "No data is available."
+        else:
+            entry["summary"] = "No structured findings were extracted."
+
+    return [
+        {
+            "combo_label": str(entry["combo_label"]),
+            "summary": _compact_text(entry.get("summary"), 260),
+            "status": str(entry.get("status") or "complete"),
+        }
+        for entry in combo_entries.values()
+        if entry.get("combo_label")
+    ]
+
+
 def _document_strategy_message(source_label: str, raw: Dict[str, Any]) -> Optional[str]:
     """Summarize document retriever query-prep decisions for progress UI."""
     prepared = raw.get("prepared_query") or {}
@@ -840,6 +905,7 @@ def _source_completion_metadata(source: str, result: ResearchResult) -> Dict[str
         "source_label": _source_label(source),
         "quick_summary": _compact_text(result.quick_summary, 320),
         "summary_text": _source_status_summary_text(source, result),
+        "combo_summaries": _source_combo_summaries(source, result),
         "finding_count": len(result.findings),
         "gap_count": len(result.gaps),
         "findings": [
@@ -1234,7 +1300,7 @@ async def run_research_tool(
             for source, result in zip(request.sources, gathered_results)
         ]
         result = _aggregate_results(source_results)
-        chart_options = build_chart_options(result.findings)
+        chart_options = build_chart_options(result.findings, request.question)
         result.chart_options = [
             option.model_dump(mode="json") for option in chart_options
         ]
@@ -1256,6 +1322,7 @@ async def run_research_tool(
                 "metadata": {
                     "evidence_registry": evidence_registry_payload,
                     "internal": True,
+                    "research_result": True,
                 },
             },
         )

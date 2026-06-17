@@ -69,6 +69,8 @@ async def model(
     conversation: Optional[Union[Dict[str, Any], List[Dict[str, str]]]] = None,
     db_names: Optional[List[str]] = None,
     source_filter: Optional[List[str]] = None,
+    prior_chart_artifacts: Optional[Dict[str, Dict[str, Any]]] = None,
+    prior_evidence_registry: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Stream one Aegis Agent turn as websocket-compatible events.
@@ -161,6 +163,8 @@ async def model(
             "ssl_config": ssl_config,
             "db_names": db_names or list(DEFAULT_DOCUMENT_SOURCES),
             "source_filter": source_filter,
+            "prior_chart_artifacts": prior_chart_artifacts or {},
+            "prior_evidence_registry": prior_evidence_registry or {},
         }
 
         async for event in run_aegis_agent(processed["messages"], context):

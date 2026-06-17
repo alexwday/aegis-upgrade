@@ -14,11 +14,15 @@ from .schemas import ProgressEvent
 
 SOURCE_LABELS: Dict[str, str] = {
     "transcripts": "Transcripts",
+    "event_transcripts": "Event transcripts",
     "investor_slides": "Investor slides",
     "supplementary_financials": "Supplementary financials",
     "rts": "Reports to shareholders",
     "pillar3": "Pillar 3",
 }
+
+COMBO_SUMMARY_LIMIT = 3
+TERMINAL_ROW_STATUSES = {"complete", "partial", "unavailable", "error"}
 
 
 def _clean_text(value: Any, limit: int = 220) -> str:
@@ -49,6 +53,14 @@ def _finding_label(source_label: str, finding: Dict[str, Any]) -> str:
     prefix = f"{source_label}: "
     if label.startswith(prefix):
         label = label[len(prefix) :]
+    summary = _finding_summary_text(finding)
+    if label and summary:
+        return f"{label}: {summary}"
+    return summary or label
+
+
+def _finding_summary_text(finding: Dict[str, Any]) -> str:
+    """Render the compact summary portion for one completed-source finding."""
     summary = _clean_text(finding.get("summary"), 230)
     metric = finding.get("metric") or {}
     if isinstance(metric, dict):
@@ -62,9 +74,7 @@ def _finding_label(source_label: str, finding: Dict[str, Any]) -> str:
             summary = f"{summary} [{' | '.join(metric_parts)}]" if summary else " | ".join(metric_parts)
     if finding.get("has_table") and summary:
         summary = f"{summary} [table]"
-    if label and summary:
-        return f"{label}: {summary}"
-    return summary or label
+    return summary
 
 
 def _source_complete_digest(event: ProgressEvent) -> Optional[str]:
@@ -102,8 +112,16 @@ def _source_complete_digest(event: ProgressEvent) -> Optional[str]:
     return None
 
 
-def _completed_source_summary_text(metadata: Dict[str, Any], source_label: str, fallback: str) -> str:
+def _completed_source_summary_text(
+    metadata: Dict[str, Any],
+    source_label: str,
+    fallback: str,
+) -> str:
     """Choose one display summary for a completed source."""
+    combo_summaries = _completed_combo_summaries(metadata, source_label)
+    if combo_summaries:
+        return _format_combo_summaries(combo_summaries, fallback)
+
     explicit = _clean_text(metadata.get("summary_text"), 420)
     if explicit:
         return explicit
@@ -139,6 +157,130 @@ def _completed_source_summary_text(metadata: Dict[str, Any], source_label: str, 
                 return text
 
     return fallback
+
+
+def _completed_combo_summaries(
+    metadata: Dict[str, Any],
+    source_label: str,
+) -> List[Dict[str, str]]:
+    """Build per-bank-period summaries for one completed source."""
+    raw_combo_summaries = metadata.get("combo_summaries")
+    if isinstance(raw_combo_summaries, list):
+        normalized = [
+            _normalize_combo_summary(source_label, item)
+            for item in raw_combo_summaries
+            if isinstance(item, dict)
+        ]
+        return [item for item in normalized if item]
+
+    combo_entries: Dict[str, Dict[str, Any]] = {}
+
+    def ensure_entry(combo_label: Any, status: str = "complete") -> Optional[Dict[str, Any]]:
+        label = _strip_source_prefix(source_label, combo_label)
+        if not label:
+            return None
+        entry = combo_entries.setdefault(
+            label,
+            {
+                "combo_label": label,
+                "summary": "",
+                "status": status,
+                "_priority": 0,
+            },
+        )
+        if status and entry.get("status") in {"pending", "complete"}:
+            entry["status"] = status
+        return entry
+
+    coverage = metadata.get("coverage") or []
+    if isinstance(coverage, list):
+        for item in coverage:
+            if not isinstance(item, dict):
+                continue
+            ensure_entry(item.get("combo_label"), _clean_text(item.get("status"), 40) or "complete")
+
+    findings = metadata.get("findings") or []
+    if isinstance(findings, list):
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            entry = ensure_entry(finding.get("combo_label"), "complete")
+            if entry is None:
+                continue
+            text = _finding_summary_text(finding)
+            if not text:
+                continue
+            priority = 2 if finding.get("finding_type") == "summary" else 1
+            if priority > int(entry.get("_priority", 0)):
+                entry["summary"] = text
+                entry["_priority"] = priority
+
+    gaps = metadata.get("gaps") or []
+    if isinstance(gaps, list):
+        for gap in gaps:
+            if not isinstance(gap, dict):
+                continue
+            entry = ensure_entry(gap.get("combo_label"), "incomplete")
+            if entry is None or entry.get("summary"):
+                continue
+            reason = _clean_text(gap.get("reason"), 230)
+            if reason:
+                entry["summary"] = reason
+
+    for entry in combo_entries.values():
+        if not entry.get("summary"):
+            status = str(entry.get("status") or "")
+            if status == "complete":
+                entry["summary"] = "Research completed."
+            elif status == "error":
+                entry["summary"] = "Research failed."
+            elif status == "unavailable":
+                entry["summary"] = "No data is available."
+            else:
+                entry["summary"] = "No structured findings were extracted."
+
+    return [
+        {
+            "combo_label": str(entry["combo_label"]),
+            "summary": _clean_text(entry.get("summary"), 230),
+            "status": _clean_text(entry.get("status"), 40) or "complete",
+        }
+        for entry in combo_entries.values()
+    ]
+
+
+def _normalize_combo_summary(
+    source_label: str,
+    item: Dict[str, Any],
+) -> Optional[Dict[str, str]]:
+    """Normalize a combo summary emitted by the research layer."""
+    combo_label = _strip_source_prefix(source_label, item.get("combo_label"))
+    summary = _clean_text(item.get("summary"), 230)
+    if not combo_label or not summary:
+        return None
+    return {
+        "combo_label": combo_label,
+        "summary": summary,
+        "status": _clean_text(item.get("status"), 40) or "complete",
+    }
+
+
+def _format_combo_summaries(combo_summaries: List[Dict[str, str]], fallback: str) -> str:
+    """Render capped per-combo summaries for the source row."""
+    if not combo_summaries:
+        return fallback
+    visible = combo_summaries[:COMBO_SUMMARY_LIMIT]
+    parts = [
+        f"{item['combo_label']}: {item['summary']}"
+        for item in visible
+        if item.get("combo_label") and item.get("summary")
+    ]
+    if not parts:
+        return fallback
+    extra_count = max(0, len(combo_summaries) - len(visible))
+    if extra_count:
+        parts.append(f"+{extra_count} more")
+    return _clean_text("; ".join(parts), 640)
 
 
 def summarize_progress(events: Iterable[ProgressEvent]) -> Optional[str]:
@@ -206,6 +348,7 @@ def build_completed_source_summaries(events: Iterable[ProgressEvent]) -> List[Di
         metadata = event.metadata or {}
         source_label = _clean_text(metadata.get("source_label") or _source_title(event.source), 80)
         quick_summary = _clean_text(metadata.get("quick_summary") or event.message, 360)
+        combo_summaries = _completed_combo_summaries(metadata, source_label)
         summary_text = _completed_source_summary_text(metadata, source_label, quick_summary)
         summaries.append(
             {
@@ -215,6 +358,8 @@ def build_completed_source_summaries(events: Iterable[ProgressEvent]) -> List[Di
                 "status_label": _source_status_label(_row_status_from_source_complete(event)),
                 "quick_summary": quick_summary,
                 "summary_text": summary_text,
+                "combo_summaries": combo_summaries[:COMBO_SUMMARY_LIMIT],
+                "combo_summary_count": len(combo_summaries),
                 "finding_count": int(metadata.get("finding_count", 0) or 0),
                 "gap_count": int(metadata.get("gap_count", 0) or 0),
                 "completed_at": event.timestamp.isoformat(),
@@ -324,16 +469,55 @@ def build_research_status_snapshot(events: Iterable[ProgressEvent]) -> Dict[str,
     event_list = list(events)
     rows = build_source_status_rows(event_list)
     completed_count = sum(
-        1 for row in rows if row["status"] in {"complete", "partial", "unavailable", "error"}
+        1 for row in rows if row["status"] in TERMINAL_ROW_STATUSES
     )
     generated_at = event_list[-1].timestamp.isoformat() if event_list else None
     return {
+        "headline": _snapshot_headline(rows, completed_count),
         "rows": rows,
         "completed_summaries": build_completed_source_summaries(event_list),
         "completed_source_count": completed_count,
         "total_source_count": len(rows),
         "generated_at": generated_at,
     }
+
+
+def _snapshot_headline(rows: List[Dict[str, Any]], completed_count: int) -> str:
+    """Build the collapsed status-bar headline for one research snapshot."""
+    total_sources = len(rows)
+    if not total_sources:
+        return "Preparing research."
+
+    combination_count = max(
+        (int(row.get("combination_count", 0) or 0) for row in rows),
+        default=0,
+    )
+    combo_phrase = _count_phrase(
+        combination_count,
+        "bank-period combination",
+        "requested bank-period combinations",
+    )
+
+    if completed_count >= total_sources:
+        return f"Research finished: {completed_count}/{total_sources} sources across {combo_phrase}."
+
+    queued_only = completed_count == 0 and all(row.get("status") == "pending" for row in rows)
+    if queued_only:
+        return f"Queued {_count_phrase(total_sources, 'source')} across {combo_phrase}."
+
+    active_count = max(0, total_sources - completed_count)
+    return (
+        f"Researching {_count_phrase(active_count, 'source')} across {combo_phrase}; "
+        f"{completed_count}/{total_sources} finished."
+    )
+
+
+def _count_phrase(count: int, singular: str, unknown_plural: Optional[str] = None) -> str:
+    """Render a count phrase with a useful fallback when the count is unknown."""
+    if count <= 0 and unknown_plural:
+        return unknown_plural
+    suffix = "" if count == 1 else "s"
+    return f"{count} {singular}{suffix}"
 
 
 async def run_status_reporter(

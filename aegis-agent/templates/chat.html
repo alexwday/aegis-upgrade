@@ -820,14 +820,15 @@
       .chart-card {
         position: relative;
         display: grid;
-        gap: 8px;
-        margin: 10px 0 12px;
+        gap: 6px;
+        width: min(100%, 700px);
+        margin: 8px 0 10px;
         overflow: hidden;
         color: var(--generated-text);
         border: 1px solid var(--generated-line);
-        border-radius: 9px;
+        border-radius: 8px;
         background: var(--generated-surface);
-        box-shadow: var(--aegis-glow);
+        box-shadow: 0 10px 26px rgba(6, 43, 96, 0.1);
         isolation: isolate;
       }
 
@@ -845,7 +846,7 @@
       }
 
       .chart-card.pending {
-        min-height: 220px;
+        min-height: 172px;
         background:
           linear-gradient(90deg, rgba(255, 255, 255, 0.03), rgba(0, 166, 214, 0.12), rgba(255, 255, 255, 0.03)),
           var(--generated-surface);
@@ -860,12 +861,12 @@
       .chart-head {
         display: grid;
         gap: 3px;
-        padding: 11px 12px 0;
+        padding: 9px 10px 0;
       }
 
       .chart-title {
         color: var(--generated-text);
-        font-size: 13px;
+        font-size: 12.5px;
         line-height: 1.25;
         font-weight: 820;
       }
@@ -879,14 +880,14 @@
 
       .chart-frame {
         position: relative;
-        min-height: 220px;
-        padding: 0 12px 10px;
+        min-height: 170px;
+        padding: 0 10px 8px;
       }
 
       .chart-svg {
         display: block;
         width: 100%;
-        min-height: 230px;
+        min-height: 178px;
         border-radius: 7px;
         background: rgba(255, 255, 255, 0.96);
         box-shadow: inset 0 0 0 1px rgba(6, 43, 96, 0.08);
@@ -934,6 +935,10 @@
         stroke-width: 3;
       }
 
+      .chart-line.secondary {
+        stroke-width: 2;
+      }
+
       .chart-area {
         fill: rgba(0, 166, 214, 0.08);
       }
@@ -949,9 +954,39 @@
         stroke-width: 1.2;
       }
 
+      .chart-average,
+      .chart-zero-line {
+        stroke: rgba(6, 43, 96, 0.42);
+        stroke-width: 1.2;
+        stroke-dasharray: 4 4;
+      }
+
+      .chart-connector {
+        fill: none;
+        stroke: rgba(6, 43, 96, 0.22);
+        stroke-width: 1.4;
+      }
+
+      .chart-segment {
+        stroke: rgba(255, 255, 255, 0.78);
+        stroke-width: 1;
+      }
+
+      .chart-waterfall-total {
+        fill: var(--aegis-navy);
+      }
+
+      .chart-waterfall-positive {
+        fill: var(--aegis-cyan);
+      }
+
+      .chart-waterfall-negative {
+        fill: #d65f59;
+      }
+
       .chart-placeholder {
         display: grid;
-        min-height: 210px;
+        min-height: 160px;
         align-items: center;
         justify-items: center;
         border: 1px solid var(--generated-line);
@@ -968,9 +1003,9 @@
         justify-content: space-between;
         flex-wrap: wrap;
         gap: 6px;
-        padding: 0 12px 11px;
+        padding: 0 10px 9px;
         color: var(--generated-muted);
-        font-size: 10.5px;
+        font-size: 10px;
       }
 
       .chart-foot .citation-chip {
@@ -1736,9 +1771,80 @@
           .filter((fact) => Number.isFinite(fact.value));
       }
 
+      function chartPoints(artifact) {
+        const points = Array.isArray(artifact?.spec?.points) ? artifact.spec.points : [];
+        return points
+          .map((point) => ({
+            ...point,
+            label: String(point.label || point.category || point.group || "").trim(),
+            group: String(point.group || "").trim(),
+            category: String(point.category || point.label || "").trim(),
+            value: Number(point.value),
+            x: Number(point.x),
+            y: Number(point.y),
+            is_total: Boolean(point.is_total),
+            evidence_ids: Array.isArray(point.evidence_ids) ? point.evidence_ids : [],
+          }))
+          .filter(
+            (point) =>
+              Number.isFinite(point.value) || (Number.isFinite(point.x) && Number.isFinite(point.y)),
+          );
+      }
+
+      function chartSeries(artifact, facts = chartFacts(artifact)) {
+        const rawSeries = Array.isArray(artifact?.spec?.series) ? artifact.spec.series : [];
+        if (rawSeries.length) {
+          return rawSeries
+            .map((series) => ({
+              name: String(series.name || "Series").trim(),
+              unit: String(series.unit || artifact?.spec?.unit || "").trim(),
+              points: (Array.isArray(series.points) ? series.points : [])
+                .map((point) => ({
+                  label: String(point.label || point.period_label || "").trim(),
+                  bank_label: String(point.bank_label || "").trim(),
+                  value: Number(point.value),
+                  evidence_ids: Array.isArray(point.evidence_ids) ? point.evidence_ids : [],
+                }))
+                .filter((point) => point.label && Number.isFinite(point.value)),
+            }))
+            .filter((series) => series.points.length);
+        }
+
+        const byBank = new Map();
+        facts.forEach((fact) => {
+          const key = fact.bank_label || "Series";
+          if (!byBank.has(key)) {
+            byBank.set(key, { name: key, unit: fact.unit || artifact?.spec?.unit || "", points: [] });
+          }
+          byBank.get(key).points.push({
+            label: fact.period_label,
+            bank_label: fact.bank_label,
+            value: fact.value,
+            evidence_ids: fact.evidence_ids,
+          });
+        });
+        return Array.from(byBank.values()).map((series) => ({
+          ...series,
+          points: series.points.sort((a, b) => _periodRankFromLabel(a.label) - _periodRankFromLabel(b.label)),
+        }));
+      }
+
+      function _periodRankFromLabel(label) {
+        const match = String(label || "").match(/Q([1-4])\s*(?:FY)?(20\d{2})/i);
+        if (match) {
+          return Number(match[2]) * 10 + Number(match[1]);
+        }
+        const year = String(label || "").match(/\b(20\d{2})\b/);
+        return year ? Number(year[1]) * 10 : 0;
+      }
+
       function chartPeriodRank(fact) {
         const quarterRank = { Q1: 1, Q2: 2, Q3: 3, Q4: 4 };
         return (Number(fact.fiscal_year) || 0) * 10 + (quarterRank[fact.quarter] || 0);
+      }
+
+      function chartColor(index) {
+        return ["#005daa", "#00a6d6", "#fdb515", "#6b7fd7", "#2f9f7a", "#d65f59"][index % 6];
       }
 
       function truncateChartLabel(value, maxLength = 14) {
@@ -1816,11 +1922,14 @@
       }
 
       function renderPeerBarChart(artifact, facts) {
-        const sorted = [...facts].sort((a, b) => b.value - a.value);
+        const isTrendBar = artifact?.spec?.chart_type === "trend_bar";
+        const sorted = isTrendBar
+          ? [...facts].sort((a, b) => chartPeriodRank(a) - chartPeriodRank(b))
+          : [...facts].sort((a, b) => b.value - a.value);
         const unit = artifact?.spec?.unit || sorted[0]?.unit || "";
-        const width = 760;
-        const height = 280;
-        const margin = { top: 18, right: 18, bottom: 48, left: 62 };
+        const width = 680;
+        const height = 220;
+        const margin = { top: 16, right: 16, bottom: 42, left: 58 };
         const plotWidth = width - margin.left - margin.right;
         const plotHeight = height - margin.top - margin.bottom;
         const [yMin, yMax] = chartExtent(sorted.map((fact) => fact.value), true);
@@ -1852,7 +1961,7 @@
               <text class="chart-tick" x="${(x + barWidth / 2).toFixed(
                 1,
               )}" y="${height - 17}" text-anchor="middle">${escapeHtml(
-                truncateChartLabel(fact.bank_label, 12),
+                truncateChartLabel(isTrendBar ? fact.period_label : fact.bank_label, 12),
               )}</text>
             </g>`;
           })
@@ -1875,12 +1984,73 @@
         </svg>`;
       }
 
+      function renderPeerRankBarChart(artifact, facts) {
+        const pointFacts = chartPoints(artifact).map((point) => ({
+          bank_label: point.label,
+          period_label: point.group || point.label,
+          value: point.value,
+          unit: artifact?.spec?.unit || "",
+        }));
+        const rows = (facts.length ? facts : pointFacts).sort((a, b) => b.value - a.value);
+        if (!rows.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || rows[0]?.unit || "";
+        const width = 680;
+        const height = Math.max(190, 76 + rows.length * 28);
+        const margin = { top: 18, right: 76, bottom: 28, left: 118 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [xMin, xMax] = chartExtent(rows.map((row) => row.value), true);
+        const xFor = (value) => margin.left + ((value - xMin) / (xMax - xMin)) * plotWidth;
+        const rowHeight = plotHeight / rows.length;
+        const average = rows.reduce((total, row) => total + row.value, 0) / rows.length;
+        const bars = rows
+          .map((row, index) => {
+            const y = margin.top + index * rowHeight + rowHeight * 0.2;
+            const zeroX = xFor(0);
+            const valueX = xFor(row.value);
+            const x = Math.min(zeroX, valueX);
+            const barWidth = Math.max(2, Math.abs(valueX - zeroX));
+            return `<g>
+              <text class="chart-tick" x="${margin.left - 10}" y="${(y + rowHeight * 0.44).toFixed(
+                1,
+              )}" text-anchor="end">${escapeHtml(truncateChartLabel(row.bank_label, 16))}</text>
+              <rect class="chart-bar ${index === 0 ? "featured" : ""}" x="${x.toFixed(
+                1,
+              )}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${(rowHeight * 0.56).toFixed(
+                1,
+              )}" rx="5"><title>${escapeHtml(chartTooltip(row, unit))}</title></rect>
+              <text class="chart-value-label" x="${(Math.max(zeroX, valueX) + 7).toFixed(
+                1,
+              )}" y="${(y + rowHeight * 0.42).toFixed(1)}">${escapeHtml(
+                formatChartValue(row.value, unit, true),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        const avgX = xFor(average);
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          <line class="chart-grid" x1="${margin.left}" x2="${margin.left + plotWidth}" y1="${margin.top}" y2="${
+            margin.top + plotHeight
+          }" />
+          <line class="chart-average" x1="${avgX.toFixed(1)}" x2="${avgX.toFixed(1)}" y1="${margin.top}" y2="${
+            margin.top + plotHeight
+          }" />
+          <text class="chart-tick" x="${avgX.toFixed(1)}" y="${margin.top - 5}" text-anchor="middle">avg</text>
+          ${bars}
+        </svg>`;
+      }
+
       function renderTrendLineChart(artifact, facts) {
         const sorted = [...facts].sort((a, b) => chartPeriodRank(a) - chartPeriodRank(b));
         const unit = artifact?.spec?.unit || sorted[0]?.unit || "";
-        const width = 760;
-        const height = 280;
-        const margin = { top: 18, right: 22, bottom: 50, left: 62 };
+        const width = 680;
+        const height = 220;
+        const margin = { top: 16, right: 20, bottom: 42, left: 58 };
         const plotWidth = width - margin.left - margin.right;
         const plotHeight = height - margin.top - margin.bottom;
         const [yMin, yMax] = chartExtent(sorted.map((fact) => fact.value), false);
@@ -1930,6 +2100,164 @@
         </svg>`;
       }
 
+      function renderMultiSeriesLineChart(artifact, facts) {
+        const series = chartSeries(artifact, facts).slice(0, 6);
+        const allPoints = series.flatMap((item) => item.points);
+        if (series.length < 1 || allPoints.length < 2) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || series[0]?.unit || "";
+        const labels = Array.from(new Set(allPoints.map((point) => point.label))).sort(
+          (a, b) => _periodRankFromLabel(a) - _periodRankFromLabel(b),
+        );
+        const width = 680;
+        const height = 230;
+        const margin = { top: 18, right: 116, bottom: 42, left: 58 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [yMin, yMax] = chartExtent(allPoints.map((point) => point.value), false);
+        const xFor = (label) =>
+          margin.left + (labels.length === 1 ? plotWidth / 2 : (plotWidth * labels.indexOf(label)) / (labels.length - 1));
+        const yFor = (value) => margin.top + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+        const paths = series
+          .map((item, index) => {
+            const path = item.points
+              .sort((a, b) => labels.indexOf(a.label) - labels.indexOf(b.label))
+              .map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${xFor(point.label).toFixed(1)} ${yFor(point.value).toFixed(1)}`)
+              .join(" ");
+            const last = item.points[item.points.length - 1];
+            return `<g>
+              <path class="chart-line secondary" d="${path}" stroke="${chartColor(index)}" />
+              <text class="chart-tick" x="${width - margin.right + 8}" y="${yFor(last.value).toFixed(
+                1,
+              )}">${escapeHtml(truncateChartLabel(item.name, 16))}</text>
+            </g>`;
+          })
+          .join("");
+        const xLabels = labels
+          .map((label) => `<text class="chart-tick" x="${xFor(label).toFixed(1)}" y="${height - 18}" text-anchor="middle">${escapeHtml(truncateChartLabel(label, 10))}</text>`)
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, unit)}
+          ${paths}
+          ${xLabels}
+        </svg>`;
+      }
+
+      function renderSlopegraphChart(artifact, facts) {
+        const series = chartSeries(artifact, facts).filter((item) => item.points.length >= 2).slice(0, 8);
+        const endpoints = series.map((item) => ({
+          name: item.name,
+          start: item.points[0],
+          end: item.points[item.points.length - 1],
+          unit: item.unit || artifact?.spec?.unit || "",
+        }));
+        if (endpoints.length < 2) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || endpoints[0].unit || "";
+        const values = endpoints.flatMap((item) => [item.start.value, item.end.value]);
+        const [yMin, yMax] = chartExtent(values, false);
+        const width = 680;
+        const height = Math.max(210, 78 + endpoints.length * 24);
+        const margin = { top: 22, right: 126, bottom: 28, left: 126 };
+        const plotHeight = height - margin.top - margin.bottom;
+        const yFor = (value) => margin.top + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+        const leftX = margin.left;
+        const rightX = width - margin.right;
+        const rows = endpoints
+          .map((item, index) => {
+            const y1 = yFor(item.start.value);
+            const y2 = yFor(item.end.value);
+            return `<g>
+              <path class="chart-connector" d="M ${leftX} ${y1.toFixed(1)} L ${rightX} ${y2.toFixed(1)}" stroke="${chartColor(index)}" />
+              <circle class="chart-point" cx="${leftX}" cy="${y1.toFixed(1)}" r="4" />
+              <circle class="chart-point" cx="${rightX}" cy="${y2.toFixed(1)}" r="4" />
+              <text class="chart-tick" x="${leftX - 8}" y="${(y1 + 3).toFixed(1)}" text-anchor="end">${escapeHtml(
+                `${truncateChartLabel(item.name, 12)} ${formatChartValue(item.start.value, unit, true)}`,
+              )}</text>
+              <text class="chart-tick" x="${rightX + 8}" y="${(y2 + 3).toFixed(1)}">${escapeHtml(
+                `${formatChartValue(item.end.value, unit, true)} ${truncateChartLabel(item.name, 12)}`,
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          <text class="chart-axis-label" x="${leftX}" y="14" text-anchor="middle">${escapeHtml(endpoints[0].start.label)}</text>
+          <text class="chart-axis-label" x="${rightX}" y="14" text-anchor="middle">${escapeHtml(endpoints[0].end.label)}</text>
+          ${rows}
+        </svg>`;
+      }
+
+      function renderDeltaBarChart(artifact, facts) {
+        let points = chartPoints(artifact);
+        if (!points.length && facts.length) {
+          const byBank = new Map();
+          facts.forEach((fact) => {
+            if (!byBank.has(fact.bank_label)) byBank.set(fact.bank_label, []);
+            byBank.get(fact.bank_label).push(fact);
+          });
+          points = Array.from(byBank.entries())
+            .map(([label, rows]) => {
+              const ordered = rows.sort((a, b) => chartPeriodRank(a) - chartPeriodRank(b));
+              return { label, value: ordered[ordered.length - 1].value - ordered[0].value };
+            })
+            .filter((point) => Number.isFinite(point.value));
+        }
+        if (!points.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || "";
+        const width = 680;
+        const height = Math.max(180, 70 + points.length * 28);
+        const margin = { top: 18, right: 72, bottom: 24, left: 118 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [xMin, xMax] = chartExtent(points.map((point) => point.value), true);
+        const xFor = (value) => margin.left + ((value - xMin) / (xMax - xMin)) * plotWidth;
+        const zeroX = xFor(0);
+        const rowHeight = plotHeight / points.length;
+        const bars = points
+          .sort((a, b) => b.value - a.value)
+          .map((point, index) => {
+            const y = margin.top + index * rowHeight + rowHeight * 0.22;
+            const valueX = xFor(point.value);
+            const x = Math.min(zeroX, valueX);
+            const barWidth = Math.max(2, Math.abs(valueX - zeroX));
+            return `<g>
+              <text class="chart-tick" x="${margin.left - 10}" y="${(y + rowHeight * 0.42).toFixed(
+                1,
+              )}" text-anchor="end">${escapeHtml(truncateChartLabel(point.label, 16))}</text>
+              <rect class="chart-bar ${point.value >= 0 ? "featured" : ""}" x="${x.toFixed(
+                1,
+              )}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${(rowHeight * 0.54).toFixed(
+                1,
+              )}" rx="5" />
+              <text class="chart-value-label" x="${(point.value >= 0 ? valueX + 7 : valueX - 7).toFixed(
+                1,
+              )}" y="${(y + rowHeight * 0.42).toFixed(1)}" text-anchor="${
+                point.value >= 0 ? "start" : "end"
+              }">${escapeHtml(formatChartValue(point.value, unit, true))}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          <line class="chart-zero-line" x1="${zeroX.toFixed(1)}" x2="${zeroX.toFixed(1)}" y1="${margin.top}" y2="${
+            margin.top + plotHeight
+          }" />
+          ${bars}
+        </svg>`;
+      }
+
       function interpolateColor(start, end, ratio) {
         return start.map((value, index) => Math.round(value + (end[index] - value) * ratio));
       }
@@ -1968,9 +2296,9 @@
           [...facts].sort((a, b) => chartPeriodRank(a) - chartPeriodRank(b)),
           (fact) => fact.period_label,
         ).map((fact) => fact.period_label);
-        const width = 760;
-        const height = Math.max(280, 116 + banks.length * 38);
-        const margin = { top: 22, right: 18, bottom: 46, left: 112 };
+        const width = 680;
+        const height = Math.max(220, 96 + banks.length * 30);
+        const margin = { top: 18, right: 16, bottom: 40, left: 98 };
         const plotWidth = width - margin.left - margin.right;
         const plotHeight = height - margin.top - margin.bottom;
         const cellWidth = plotWidth / Math.max(1, periods.length);
@@ -2045,19 +2373,276 @@
         </svg>`;
       }
 
-      function renderChartGraphic(artifact) {
-        const facts = chartFacts(artifact);
-        if (!artifact?.spec || !facts.length) {
+      function renderCompositionChart(artifact) {
+        const points = chartPoints(artifact).filter((point) => point.group && point.category);
+        if (!points.length) {
           return '<div class="chart-placeholder">Chart data unavailable</div>';
         }
-        if (artifact.spec.chart_type === "peer_bar") {
+        const groups = Array.from(new Set(points.map((point) => point.group)));
+        const categories = Array.from(new Set(points.map((point) => point.category)));
+        const normalize = artifact?.spec?.chart_type === "composition_100_bar";
+        const unit = normalize ? "%" : artifact?.spec?.unit || "";
+        const width = 680;
+        const height = Math.max(210, 96 + groups.length * 44);
+        const margin = { top: 18, right: 132, bottom: 34, left: 96 };
+        const plotWidth = width - margin.left - margin.right;
+        const rowHeight = (height - margin.top - margin.bottom) / groups.length;
+        const maxTotal = Math.max(
+          1,
+          ...groups.map((group) =>
+            points.filter((point) => point.group === group).reduce((total, point) => total + point.value, 0),
+          ),
+        );
+        const bars = groups
+          .map((group, groupIndex) => {
+            const groupPoints = points.filter((point) => point.group === group);
+            const total = groupPoints.reduce((sum, point) => sum + point.value, 0) || 1;
+            let cursor = margin.left;
+            const segments = groupPoints
+              .map((point) => {
+                const renderedValue = normalize ? (point.value / total) * 100 : point.value;
+                const widthValue = normalize ? renderedValue / 100 : point.value / maxTotal;
+                const segmentWidth = Math.max(1, widthValue * plotWidth);
+                const x = cursor;
+                cursor += segmentWidth;
+                const colorIndex = categories.indexOf(point.category);
+                return `<rect class="chart-segment" x="${x.toFixed(1)}" y="${(
+                  margin.top + groupIndex * rowHeight + rowHeight * 0.24
+                ).toFixed(1)}" width="${segmentWidth.toFixed(1)}" height="${(rowHeight * 0.52).toFixed(
+                  1,
+                )}" rx="4" fill="${chartColor(colorIndex)}"><title>${escapeHtml(
+                  `${group} | ${point.category}: ${formatChartValue(renderedValue, unit, true)}`,
+                )}</title></rect>`;
+              })
+              .join("");
+            return `<g>
+              <text class="chart-tick" x="${margin.left - 10}" y="${(
+                margin.top + groupIndex * rowHeight + rowHeight * 0.55
+              ).toFixed(1)}" text-anchor="end">${escapeHtml(truncateChartLabel(group, 15))}</text>
+              ${segments}
+            </g>`;
+          })
+          .join("");
+        const legend = categories
+          .slice(0, 6)
+          .map((category, index) => {
+            const y = margin.top + index * 18 + 4;
+            return `<g>
+              <rect x="${width - margin.right + 12}" y="${y}" width="9" height="9" rx="2" fill="${chartColor(
+                index,
+              )}" />
+              <text class="chart-tick" x="${width - margin.right + 27}" y="${y + 8}">${escapeHtml(
+                truncateChartLabel(category, 16),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${bars}
+          ${legend}
+        </svg>`;
+      }
+
+      function renderWaterfallChart(artifact) {
+        const points = chartPoints(artifact);
+        if (points.length < 3) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || "";
+        let running = 0;
+        const barsData = points.map((point, index) => {
+          const start = point.is_total ? 0 : running;
+          const end = point.is_total ? point.value : running + point.value;
+          running = end;
+          return { ...point, start, end, is_total: point.is_total || index === 0 || index === points.length - 1 };
+        });
+        const values = barsData.flatMap((point) => [point.start, point.end]);
+        const [yMin, yMax] = chartExtent(values, true);
+        const width = 680;
+        const height = 230;
+        const margin = { top: 18, right: 20, bottom: 54, left: 60 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const slot = plotWidth / barsData.length;
+        const barWidth = Math.max(18, slot * 0.62);
+        const yFor = (value) => margin.top + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+        const bars = barsData
+          .map((point, index) => {
+            const x = margin.left + slot * index + (slot - barWidth) / 2;
+            const yStart = yFor(point.start);
+            const yEnd = yFor(point.end);
+            const y = Math.min(yStart, yEnd);
+            const heightValue = Math.max(2, Math.abs(yEnd - yStart));
+            const className = point.is_total
+              ? "chart-waterfall-total"
+              : point.value >= 0
+                ? "chart-waterfall-positive"
+                : "chart-waterfall-negative";
+            return `<g>
+              <rect class="${className}" x="${x.toFixed(1)}" y="${y.toFixed(
+                1,
+              )}" width="${barWidth.toFixed(1)}" height="${heightValue.toFixed(1)}" rx="5">
+                <title>${escapeHtml(`${point.label}: ${formatChartValue(point.value, unit)}`)}</title>
+              </rect>
+              <text class="chart-tick" x="${(x + barWidth / 2).toFixed(1)}" y="${height - 18}" text-anchor="middle">${escapeHtml(
+                truncateChartLabel(point.label, 9),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, unit)}
+          ${bars}
+        </svg>`;
+      }
+
+      function renderScatterPlotChart(artifact) {
+        const points = chartPoints(artifact).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+        if (points.length < 3) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const width = 680;
+        const height = 230;
+        const margin = { top: 18, right: 20, bottom: 42, left: 60 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [xMin, xMax] = chartExtent(points.map((point) => point.x), false);
+        const [yMin, yMax] = chartExtent(points.map((point) => point.y), false);
+        const xUnit = artifact?.spec?.encoding?.x_unit || "";
+        const yUnit = artifact?.spec?.encoding?.y_unit || "";
+        const xFor = (value) => margin.left + ((value - xMin) / (xMax - xMin)) * plotWidth;
+        const yFor = (value) => margin.top + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+        const dots = points
+          .map((point, index) => `<g>
+            <circle class="chart-point" cx="${xFor(point.x).toFixed(1)}" cy="${yFor(point.y).toFixed(
+              1,
+            )}" r="5" fill="${chartColor(index)}">
+              <title>${escapeHtml(
+                `${point.label}: ${formatChartValue(point.x, xUnit)} / ${formatChartValue(point.y, yUnit)}`,
+              )}</title>
+            </circle>
+            <text class="chart-tick" x="${(xFor(point.x) + 7).toFixed(1)}" y="${(yFor(point.y) - 6).toFixed(
+              1,
+            )}">${escapeHtml(truncateChartLabel(point.label, 10))}</text>
+          </g>`)
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, yUnit)}
+          ${dots}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 4}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "X metric",
+          )}</text>
+          <text class="chart-axis-label" x="16" y="${height / 2}" text-anchor="middle" transform="rotate(-90 16 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || "Y metric")}</text>
+        </svg>`;
+      }
+
+      function renderSmallMultiplePanelChart(artifact) {
+        const series = chartSeries(artifact).slice(0, 6);
+        if (series.length < 2) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const width = 680;
+        const columns = 2;
+        const panelWidth = width / columns;
+        const panelHeight = 128;
+        const rows = Math.ceil(series.length / columns);
+        const height = rows * panelHeight;
+        const panels = series
+          .map((item, index) => {
+            const col = index % columns;
+            const row = Math.floor(index / columns);
+            const x0 = col * panelWidth;
+            const y0 = row * panelHeight;
+            const margin = { top: y0 + 24, right: width - x0 - panelWidth + 18, bottom: height - y0 - panelHeight + 26, left: x0 + 48 };
+            const plotWidth = panelWidth - 66;
+            const plotHeight = panelHeight - 52;
+            const [yMin, yMax] = chartExtent(item.points.map((point) => point.value), false);
+            const labels = item.points.map((point) => point.label);
+            const xFor = (pointIndex) =>
+              x0 + 48 + (labels.length === 1 ? plotWidth / 2 : (plotWidth * pointIndex) / (labels.length - 1));
+            const yFor = (value) => y0 + 24 + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+            const path = item.points
+              .map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${xFor(pointIndex).toFixed(1)} ${yFor(point.value).toFixed(1)}`)
+              .join(" ");
+            const last = item.points[item.points.length - 1];
+            return `<g>
+              <text class="chart-axis-label" x="${(x0 + 10).toFixed(1)}" y="${(y0 + 15).toFixed(
+                1,
+              )}">${escapeHtml(truncateChartLabel(item.name, 24))}</text>
+              ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, item.unit)}
+              <path class="chart-line secondary" d="${path}" stroke="${chartColor(index)}" />
+              <text class="chart-value-label" x="${(xFor(item.points.length - 1) + 6).toFixed(
+                1,
+              )}" y="${(yFor(last.value) - 5).toFixed(1)}">${escapeHtml(
+                formatChartValue(last.value, item.unit, true),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${panels}
+        </svg>`;
+      }
+
+      function renderChartGraphic(artifact) {
+        const facts = chartFacts(artifact);
+        const points = chartPoints(artifact);
+        const series = chartSeries(artifact, facts);
+        if (!artifact?.spec || (!facts.length && !points.length && !series.length)) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        if (artifact.spec.chart_type === "peer_bar" || artifact.spec.chart_type === "trend_bar") {
           return renderPeerBarChart(artifact, facts);
         }
+        if (artifact.spec.chart_type === "peer_rank_bar") {
+          return renderPeerRankBarChart(artifact, facts);
+        }
         if (artifact.spec.chart_type === "trend_line") {
+          if (!facts.length && series.length) {
+            return renderMultiSeriesLineChart(artifact, facts);
+          }
           return renderTrendLineChart(artifact, facts);
+        }
+        if (artifact.spec.chart_type === "multi_series_line") {
+          return renderMultiSeriesLineChart(artifact, facts);
+        }
+        if (artifact.spec.chart_type === "slopegraph") {
+          return renderSlopegraphChart(artifact, facts);
+        }
+        if (artifact.spec.chart_type === "delta_bar") {
+          return renderDeltaBarChart(artifact, facts);
         }
         if (artifact.spec.chart_type === "heatmap") {
           return renderHeatmapChart(artifact, facts);
+        }
+        if (
+          artifact.spec.chart_type === "composition_stacked_bar" ||
+          artifact.spec.chart_type === "composition_100_bar"
+        ) {
+          return renderCompositionChart(artifact);
+        }
+        if (artifact.spec.chart_type === "waterfall") {
+          return renderWaterfallChart(artifact);
+        }
+        if (artifact.spec.chart_type === "scatter_plot") {
+          return renderScatterPlotChart(artifact);
+        }
+        if (artifact.spec.chart_type === "small_multiple_panel") {
+          return renderSmallMultiplePanelChart(artifact);
         }
         return '<div class="chart-placeholder">Unsupported chart type</div>';
       }
@@ -2385,6 +2970,8 @@
           statusEvents: [],
           evidenceRegistry: { __flat: {} },
           researchStatus: null,
+          researchSnapshotStarted: false,
+          researchProgressLabel: "",
           responseStarted: false,
           responseShell: null,
           finalBody: null,
@@ -2399,6 +2986,10 @@
       }
 
       function updateStatusCount(turn) {
+        if (turn.researchProgressLabel) {
+          turn.statusCount.textContent = turn.researchProgressLabel;
+          return;
+        }
         turn.statusCount.textContent =
           turn.statusEvents.length === 1 ? "1 update" : `${turn.statusEvents.length} updates`;
       }
@@ -2525,6 +3116,7 @@
       function renderResearchStatusSnapshot(snapshot) {
         const turn = beginAssistantTurn();
         turn.hasResearch = true;
+        turn.researchSnapshotStarted = true;
         if (turn.responseStarted || turn.waitingForUser) {
           return;
         }
@@ -2541,6 +3133,13 @@
               status_label: "Complete",
             }));
         board.updated.textContent = formatSnapshotTime(snapshot?.generated_at);
+        if (turn.statusText) {
+          turn.statusText.textContent = snapshot?.headline || "Research in progress.";
+        }
+        const completedSources = Number(snapshot?.completed_source_count || 0);
+        const totalSources = Number(snapshot?.total_source_count || displayRows.length || 0);
+        turn.researchProgressLabel = totalSources ? `${completedSources}/${totalSources} sources` : "";
+        updateStatusCount(turn);
         if (!displayRows.length) {
           board.body.innerHTML =
             '<tr><td colspan="3" class="research-summary-empty">Waiting for research to start.</td></tr>';
@@ -2630,7 +3229,9 @@
           scrollToBottom();
           return;
         }
-        turn.statusText.textContent = text;
+        if (!options.research || !turn.researchSnapshotStarted) {
+          turn.statusText.textContent = text;
+        }
         addStatusTimelineRow(turn, source, text);
         scrollToBottom();
       }

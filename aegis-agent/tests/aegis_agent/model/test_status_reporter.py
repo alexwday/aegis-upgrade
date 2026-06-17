@@ -154,11 +154,20 @@ def test_status_snapshot_builds_source_rows_and_completed_summary() -> None:
             "status_label": "Complete",
             "quick_summary": "Investor slides research completed with 1 finding(s).",
             "summary_text": "RY-CA Q1 2026: Capital remained strong and credit metrics were stable.",
+            "combo_summaries": [
+                {
+                    "combo_label": "RY-CA Q1 2026",
+                    "summary": "Capital remained strong and credit metrics were stable.",
+                    "status": "complete",
+                }
+            ],
+            "combo_summary_count": 1,
             "finding_count": 1,
             "gap_count": 0,
             "completed_at": events[-1].timestamp.isoformat(),
         }
     ]
+    assert snapshot["headline"] == "Researching 1 source across 2 bank-period combinations; 1/2 finished."
     assert snapshot["completed_source_count"] == 1
     assert snapshot["total_source_count"] == 2
     assert snapshot["rows"][0]["source_label"] == "Investor slides"
@@ -166,3 +175,171 @@ def test_status_snapshot_builds_source_rows_and_completed_summary() -> None:
     assert snapshot["rows"][0]["finding_count"] == 1
     assert snapshot["rows"][1]["source_label"] == "Reports to shareholders"
     assert snapshot["rows"][1]["status"] == "pending"
+
+
+def test_status_snapshot_groups_completed_summary_by_combo() -> None:
+    """Completed source summaries should preserve multiple bank-period combinations."""
+    events = [
+        ProgressEvent(
+            source="investor_slides",
+            stage="source_queued",
+            status="pending",
+            message="Investor slides queued.",
+            metadata={"source_label": "Investor slides", "combination_count": 2},
+        ),
+        ProgressEvent(
+            source="investor_slides",
+            stage="source_complete",
+            status="complete",
+            message="Investor slides research completed with 4 finding(s).",
+            metadata={
+                "status": "success",
+                "source_label": "Investor slides",
+                "finding_count": 4,
+                "gap_count": 0,
+                "findings": [
+                    {
+                        "combo_label": "Investor slides: RY-CA Q1 2026",
+                        "summary": "RBC first quantitative finding.",
+                        "finding_type": "quantitative",
+                    },
+                    {
+                        "combo_label": "Investor slides: TD-CA Q1 2026",
+                        "summary": "TD first quantitative finding.",
+                        "finding_type": "quantitative",
+                    },
+                    {
+                        "combo_label": "Investor slides: RY-CA Q1 2026",
+                        "summary": "RBC summary finding wins.",
+                        "finding_type": "summary",
+                    },
+                    {
+                        "combo_label": "Investor slides: TD-CA Q1 2026",
+                        "summary": "TD summary finding wins.",
+                        "finding_type": "summary",
+                    },
+                ],
+            },
+        ),
+    ]
+
+    snapshot = build_research_status_snapshot(events)
+    completed = snapshot["completed_summaries"][0]
+
+    assert completed["combo_summaries"] == [
+        {
+            "combo_label": "RY-CA Q1 2026",
+            "summary": "RBC summary finding wins.",
+            "status": "complete",
+        },
+        {
+            "combo_label": "TD-CA Q1 2026",
+            "summary": "TD summary finding wins.",
+            "status": "complete",
+        },
+    ]
+    assert completed["summary_text"] == (
+        "RY-CA Q1 2026: RBC summary finding wins.; "
+        "TD-CA Q1 2026: TD summary finding wins."
+    )
+
+
+def test_status_snapshot_caps_completed_combo_summaries() -> None:
+    """Source row summaries should stay compact when many combinations complete."""
+    findings = [
+        {
+            "combo_label": f"Reports to shareholders: BANK{i} Q1 2026",
+            "summary": f"BANK{i} summary.",
+            "finding_type": "summary",
+        }
+        for i in range(1, 5)
+    ]
+    events = [
+        ProgressEvent(
+            source="rts",
+            stage="source_queued",
+            status="pending",
+            message="Reports to shareholders queued.",
+            metadata={"source_label": "Reports to shareholders", "combination_count": 4},
+        ),
+        ProgressEvent(
+            source="rts",
+            stage="source_complete",
+            status="complete",
+            message="Reports to shareholders research completed.",
+            metadata={
+                "status": "success",
+                "source_label": "Reports to shareholders",
+                "finding_count": 4,
+                "gap_count": 0,
+                "findings": findings,
+            },
+        ),
+    ]
+
+    completed = build_research_status_snapshot(events)["completed_summaries"][0]
+
+    assert len(completed["combo_summaries"]) == 3
+    assert completed["combo_summary_count"] == 4
+    assert completed["summary_text"].endswith("; +1 more")
+
+
+def test_status_snapshot_headline_reflects_queued_running_and_finished_states() -> None:
+    """Collapsed status headlines should describe aggregate source progress."""
+    queued_events = [
+        ProgressEvent(
+            source="investor_slides",
+            stage="source_queued",
+            status="pending",
+            message="Investor slides queued.",
+            metadata={"source_label": "Investor slides", "combination_count": 3},
+        ),
+        ProgressEvent(
+            source="rts",
+            stage="source_queued",
+            status="pending",
+            message="Reports to shareholders queued.",
+            metadata={"source_label": "Reports to shareholders", "combination_count": 3},
+        ),
+    ]
+
+    queued = build_research_status_snapshot(queued_events)
+    running = build_research_status_snapshot(
+        queued_events
+        + [
+            ProgressEvent(
+                source="investor_slides",
+                stage="source_complete",
+                status="complete",
+                message="Investor slides complete.",
+                metadata={"status": "success", "source_label": "Investor slides"},
+            )
+        ]
+    )
+    finished = build_research_status_snapshot(
+        queued_events
+        + [
+            ProgressEvent(
+                source="investor_slides",
+                stage="source_complete",
+                status="complete",
+                message="Investor slides complete.",
+                metadata={"status": "success", "source_label": "Investor slides"},
+            ),
+            ProgressEvent(
+                source="rts",
+                stage="source_complete",
+                status="complete",
+                message="Reports to shareholders complete.",
+                metadata={"status": "success", "source_label": "Reports to shareholders"},
+            ),
+        ]
+    )
+
+    assert queued["headline"] == "Queued 2 sources across 3 bank-period combinations."
+    assert running["headline"] == (
+        "Researching 1 source across 3 bank-period combinations; 1/2 finished."
+    )
+    assert finished["headline"] == (
+        "Research finished: 2/2 sources across 3 bank-period combinations."
+    )
