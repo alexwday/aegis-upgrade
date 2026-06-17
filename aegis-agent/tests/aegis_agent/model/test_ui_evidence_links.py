@@ -158,6 +158,7 @@ def test_chat_template_renders_json_chart_artifacts_without_images() -> None:
     assert 'artifact.spec.chart_type === "trend_bar"' in html
     assert 'status === "hidden"' in html
     assert "Loading chart" in html
+    assert r"CHART_SLOT:[\s\S]*?" in html
     assert "chartArtifacts: {}" in html
     assert "asset_url" not in html
     assert "<img src=" not in html

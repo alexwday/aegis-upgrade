@@ -2776,7 +2776,8 @@
           .replaceAll("&lt;details&gt;", '<details class="transcript-excerpt">')
           .replaceAll("&lt;/details&gt;", "</details>")
           .replaceAll("&lt;summary&gt;", "<summary>")
-          .replaceAll("&lt;/summary&gt;", "</summary>");
+          .replaceAll("&lt;/summary&gt;", "</summary>")
+          .replace(/\[\[CHART_SLOT:[\s\S]*?\]\]/g, "");
         const lines = normalized.split(/\n/);
         const blocks = [];
 

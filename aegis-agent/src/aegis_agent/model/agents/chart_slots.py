@@ -117,11 +117,27 @@ class ChartSlotStreamProcessor:
             self.buffer = remainder[partial_index:]
             return events
 
+        partial_prefix_index = _chart_slot_partial_prefix_index(remainder)
+        if partial_prefix_index >= 0 and not final:
+            if partial_prefix_index > 0:
+                _append_agent_event(events, remainder[:partial_prefix_index])
+            self.buffer = remainder[partial_prefix_index:]
+            return events
+
         if partial_index >= 0 and final:
             _append_agent_event(events, remainder[:partial_index])
             self.buffer = ""
             get_logger().warning(
                 "chart_slot.incomplete_marker",
+                execution_id=self.context.get("execution_id"),
+            )
+            return events
+
+        if partial_prefix_index >= 0 and final:
+            _append_agent_event(events, remainder[:partial_prefix_index])
+            self.buffer = ""
+            get_logger().warning(
+                "chart_slot.incomplete_prefix",
                 execution_id=self.context.get("execution_id"),
             )
             return events
@@ -450,6 +466,16 @@ async def build_chart_artifact_for_slot(
 def _append_agent_event(events: List[Dict[str, Any]], content: str) -> None:
     if content:
         events.append({"type": "agent", "name": "aegis", "content": content})
+
+
+def _chart_slot_partial_prefix_index(text: str) -> int:
+    """Return where a trailing partial CHART_SLOT start token begins, if any."""
+    max_prefix = min(len(CHART_SLOT_START) - 1, len(text))
+    for length in range(max_prefix, 0, -1):
+        suffix = text[-length:]
+        if CHART_SLOT_START.startswith(suffix):
+            return len(text) - length
+    return -1
 
 
 def _slot_is_approved(slot: ChartSlot, context: Mapping[str, Any]) -> bool:

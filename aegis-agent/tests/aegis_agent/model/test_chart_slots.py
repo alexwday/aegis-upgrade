@@ -141,6 +141,38 @@ async def test_split_slot_marker_is_buffered_until_complete() -> None:
     await asyncio.gather(*processor.context["chart_worker_tasks"])
 
 
+@pytest.mark.asyncio
+async def test_split_slot_start_prefix_is_buffered_until_complete() -> None:
+    """The CHART_SLOT start token itself may be split across chunks."""
+    processor = ChartSlotStreamProcessor(
+        {
+            "execution_id": "test",
+            "background_event_queue": asyncio.Queue(),
+            "approved_chart_slots": {
+                "C1": ChartSlot.model_validate(
+                    {
+                        "slot_id": "C1",
+                        "title": "T",
+                        "chart_type": "peer_rank_bar",
+                        "intent": "I",
+                    }
+                ).model_dump(mode="json")
+            },
+        }
+    )
+
+    first = processor.push("Intro\n[[CHART_")
+    second = processor.push(
+        'SLOT:{"slot_id":"C1","title":"T","chart_type":"peer_rank_bar","intent":"I"}]]\nDone'
+    )
+
+    assert first == [{"type": "agent", "name": "aegis", "content": "Intro\n"}]
+    assert second[0]["type"] == "chart_artifact"
+    assert second[1]["content"] == "[[CHART:C1]]"
+    assert second[2]["content"] == "\nDone"
+    await asyncio.gather(*processor.context["chart_worker_tasks"])
+
+
 def test_malformed_slot_json_is_stripped() -> None:
     """Malformed chart slots should not appear in the final answer."""
     processor = ChartSlotStreamProcessor({"execution_id": "test"})
