@@ -195,14 +195,6 @@
         background: var(--generated-surface);
       }
 
-      .status-panel.in-response {
-        border-radius: 9px;
-      }
-
-      .status-panel.in-response::after {
-        border-radius: 8px;
-      }
-
       .status-panel.complete::before {
         display: none;
       }
@@ -406,7 +398,7 @@
 
       .research-status-board {
         display: grid;
-        gap: 8px;
+        gap: 6px;
       }
 
       .research-status-head {
@@ -430,142 +422,100 @@
         white-space: nowrap;
       }
 
-      .research-source-strip {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 5px;
-      }
-
-      .research-source-tile {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
-        align-items: center;
-        gap: 5px;
-        min-height: 26px;
-        padding: 4px 6px;
-        border: 1px solid var(--generated-line);
-        border-radius: 7px;
-        background: rgba(255, 255, 255, 0.07);
-        color: var(--generated-text);
-      }
-
       .research-source-dot {
+        display: inline-block;
+        flex: 0 0 auto;
         width: 7px;
         height: 7px;
         border-radius: 999px;
         background: var(--generated-muted);
       }
 
-      .research-source-tile.checking .research-source-dot,
-      .research-source-tile.in_progress .research-source-dot,
-      .research-source-tile.incomplete .research-source-dot {
+      .research-status-row.checking .research-source-dot,
+      .research-status-row.in_progress .research-source-dot,
+      .research-status-row.incomplete .research-source-dot {
         background: var(--aegis-gold);
       }
 
-      .research-source-tile.complete .research-source-dot,
-      .research-source-tile.partial .research-source-dot {
+      .research-status-row.complete .research-source-dot,
+      .research-status-row.partial .research-source-dot {
         background: var(--aegis-cyan);
       }
 
-      .research-source-tile.error .research-source-dot {
+      .research-status-row.error .research-source-dot {
         background: #ffb4a9;
+      }
+
+      .research-status-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        border: 1px solid var(--generated-line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--generated-soft);
+      }
+
+      .research-status-table th,
+      .research-status-table td {
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--generated-line);
+        color: var(--generated-muted);
+        font-size: 10.5px;
+        line-height: 1.35;
+        text-align: left;
+        vertical-align: top;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+
+      .research-status-table th {
+        background: var(--generated-soft-strong);
+        color: var(--generated-text);
+        font-size: 9px;
+        font-weight: 850;
+        text-transform: uppercase;
+      }
+
+      .research-status-table tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .research-status-table .source-col {
+        width: 22%;
+      }
+
+      .research-status-table .status-col {
+        width: 20%;
+      }
+
+      .research-status-source {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        max-width: 100%;
       }
 
       .research-source-name {
         min-width: 0;
-        overflow: hidden;
         color: var(--generated-text);
         font-size: 10px;
         font-weight: 820;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .research-source-status {
-        color: var(--generated-muted);
-        font-size: 9px;
-        font-weight: 780;
-        text-transform: uppercase;
-        white-space: nowrap;
-      }
-
-      .research-status-summary {
-        display: grid;
-        gap: 5px;
-        max-height: 150px;
-        overflow-y: auto;
-        padding: 6px;
-        border: 1px solid var(--generated-line);
-        border-radius: 8px;
-        background: var(--generated-soft);
-      }
-
-      .research-status-summary strong {
-        color: var(--generated-text);
-        font-size: 9.5px;
-        text-transform: uppercase;
-      }
-
-      .research-status-summary p {
-        margin: 0;
-        color: var(--generated-muted);
-        font-size: 12px;
-        line-height: 1.42;
-      }
-
-      .research-summary-list {
-        display: grid;
-        gap: 4px;
-        margin: 0;
-        padding: 0;
-        list-style: none;
-      }
-
-      .research-summary-list li {
-        display: grid;
-        gap: 2px;
-        padding: 5px 6px;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 6px;
-        background: rgba(255, 255, 255, 0.05);
-        color: var(--generated-muted);
-        font-size: 10.5px;
         line-height: 1.3;
       }
 
-      .research-summary-meta {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        min-width: 0;
-      }
-
-      .research-summary-label,
-      .research-summary-counts {
-        white-space: nowrap;
-      }
-
-      .research-summary-label {
+      .research-source-status {
         color: var(--generated-text);
-        min-width: 0;
-        overflow: hidden;
-        font-size: 9.5px;
-        font-weight: 850;
-        text-overflow: ellipsis;
+        font-size: 10px;
+        font-weight: 780;
         text-transform: uppercase;
-        white-space: nowrap;
-      }
-
-      .research-summary-counts {
-        color: var(--generated-muted);
-        font-size: 9px;
-        font-weight: 760;
       }
 
       .research-summary-body {
         color: var(--generated-muted);
         font-size: 10.5px;
-        line-height: 1.32;
+        line-height: 1.35;
       }
 
       .research-summary-empty {
@@ -825,17 +775,24 @@
       .research-table-wrap {
         margin: 8px 0 10px;
         overflow-x: auto;
+        max-width: 100%;
+        scrollbar-gutter: stable;
+        scrollbar-width: thin;
+        overscroll-behavior-x: contain;
+        -webkit-overflow-scrolling: touch;
         border: 1px solid var(--line);
         border-radius: 8px;
         background: #ffffff;
       }
 
       .research-table {
-        width: 100%;
-        min-width: 420px;
+        width: max(100%, var(--table-min-width, 420px));
+        min-width: var(--table-min-width, 420px);
         border-collapse: collapse;
+        table-layout: fixed;
         font-size: 12px;
         line-height: 1.35;
+        white-space: normal;
       }
 
       .research-table th,
@@ -844,6 +801,8 @@
         border-bottom: 1px solid var(--line);
         text-align: left;
         vertical-align: top;
+        overflow-wrap: break-word;
+        word-break: normal;
       }
 
       .research-table th {
@@ -933,13 +892,11 @@
         color: #005daa;
       }
 
-      .evidence-stack,
-      .trace-stack {
+      .evidence-stack {
         display: block;
       }
 
-      .evidence-stack.empty,
-      .trace-stack.empty {
+      .evidence-stack.empty {
         display: none;
       }
 
@@ -1296,7 +1253,6 @@
 
         .choice-grid,
         .metric-grid,
-        .research-source-strip,
         .composer {
           grid-template-columns: 1fr;
         }
@@ -1520,6 +1476,37 @@
         return renderEvidenceMarkers(html, evidenceRegistry);
       }
 
+      function measureTableCellText(value) {
+        return stripEvidenceMarkers(value)
+          .replace(/\*\*/g, "")
+          .replace(/&[#a-zA-Z0-9]+;/g, "x")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function estimateTableColumnWidths(headers, rows) {
+        const minWidth = 96;
+        const maxWidth = 260;
+        const numericMaxWidth = 150;
+        const widthForText = (value, isHeader = false) => {
+          const text = measureTableCellText(value);
+          const length = text.length;
+          const numeric = /^[\s$%()+,\-.\d]+$/.test(text) && /\d/.test(text);
+          const base = isHeader ? 86 : 74;
+          const perChar = isHeader ? 6.4 : 5.7;
+          const cap = numeric ? numericMaxWidth : maxWidth;
+          return Math.max(minWidth, Math.min(cap, Math.ceil(base + length * perChar)));
+        };
+
+        return headers.map((header, columnIndex) => {
+          const headerWidth = widthForText(header, true);
+          const rowWidth = rows.reduce((widest, row) => {
+            return Math.max(widest, widthForText(row[columnIndex] || ""));
+          }, minWidth);
+          return Math.max(headerWidth, rowWidth);
+        });
+      }
+
       function renderMarkdownTable(lines, startIndex, evidenceRegistry = {}) {
         const headers = splitMarkdownTableRow(lines[startIndex]);
         const rows = [];
@@ -1533,6 +1520,14 @@
           index += 1;
         }
 
+        const columnWidths = estimateTableColumnWidths(headers, rows);
+        const tableMinWidth = Math.max(
+          420,
+          columnWidths.reduce((total, width) => total + width, 0),
+        );
+        const colgroupHtml = `<colgroup>${columnWidths
+          .map((width) => `<col style="width: ${width}px" />`)
+          .join("")}</colgroup>`;
         const headerHtml = headers
           .map((cell) => `<th>${renderInlineMarkdown(cell, evidenceRegistry)}</th>`)
           .join("");
@@ -1544,8 +1539,13 @@
             return `<tr>${cells.join("")}</tr>`;
           })
           .join("");
+        const tableHtml = [
+          `<div class="research-table-wrap"><table class="research-table" style="--table-min-width: ${tableMinWidth}px">`,
+          colgroupHtml,
+          `<thead><tr>${headerHtml}</tr></thead><tbody>${rowHtml}</tbody></table></div>`,
+        ].join("");
         return {
-          html: `<div class="research-table-wrap"><table class="research-table"><thead><tr>${headerHtml}</tr></thead><tbody>${rowHtml}</tbody></table></div>`,
+          html: tableHtml,
           nextIndex: index,
         };
       }
@@ -1697,7 +1697,7 @@
         turn.progressLog = null;
         turn.main.className = "main-response polished";
         turn.main.innerHTML = "";
-        collapseStatusTrace(turn);
+        removeStatusTrace(turn);
 
         const article = document.createElement("article");
         article.className = `research-answer ${escapeHtml(shell.render_mode)}`;
@@ -1811,10 +1811,7 @@
         const evidence = document.createElement("div");
         evidence.className = "evidence-stack empty";
 
-        const trace = document.createElement("div");
-        trace.className = "trace-stack empty";
-
-        responseFrame.append(main, evidence, trace);
+        responseFrame.append(main, evidence);
         root.append(statusPanel, responseFrame);
         messages.appendChild(root);
 
@@ -1827,12 +1824,9 @@
           timeline,
           main,
           evidence,
-          trace,
           statusButton,
           progressLog: null,
           statusEvents: [],
-          summaryEvents: [],
-          summariesMoved: false,
           evidenceRegistry: { __flat: {} },
           researchStatus: null,
           responseStarted: false,
@@ -1908,53 +1902,67 @@
             <div class="research-status-title">Research status</div>
             <div class="research-status-updated">Live</div>
           </div>
-          <div class="research-source-strip" aria-label="Research source status"></div>
-          <div class="research-status-summary">
-            <strong>Completed source summaries</strong>
-            <ul class="research-summary-list">
-              <li class="research-summary-empty">No research results completed yet.</li>
-            </ul>
-          </div>
+          <table class="research-status-table" aria-label="Research source status">
+            <colgroup>
+              <col class="source-col" />
+              <col class="status-col" />
+              <col />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Status</th>
+                <th>Quick summary</th>
+              </tr>
+            </thead>
+            <tbody class="research-status-body">
+              <tr>
+                <td colspan="3" class="research-summary-empty">Waiting for research to start.</td>
+              </tr>
+            </tbody>
+          </table>
         `;
         turn.main.appendChild(board);
         turn.researchStatus = {
           board,
           updated: board.querySelector(".research-status-updated"),
-          sources: board.querySelector(".research-source-strip"),
-          summary: board.querySelector(".research-summary-list"),
+          body: board.querySelector(".research-status-body"),
         };
         return turn.researchStatus;
       }
 
-      function renderCompletedResearchSummaries(board, snapshot) {
+      function getResearchSummaryKeys(item) {
+        const keys = [item?.source_id, item?.source_label]
+          .map((value) => String(value || "").toLowerCase().trim())
+          .filter(Boolean);
+        return Array.from(new Set(keys));
+      }
+
+      function getResearchStatusClass(value) {
+        return String(value || "pending").replace(/[^a-z0-9_-]/gi, "_");
+      }
+
+      function indexCompletedResearchSummaries(snapshot) {
         const summaries = Array.isArray(snapshot?.completed_summaries)
           ? snapshot.completed_summaries
           : [];
-        if (!summaries.length) {
-          board.summary.innerHTML =
-            '<li class="research-summary-empty">No research results completed yet.</li>';
-          return;
+        const index = new Map();
+        summaries.forEach((item) => {
+          getResearchSummaryKeys(item).forEach((key) => {
+            index.set(key, item);
+          });
+        });
+        return index;
+      }
+
+      function getResearchRowSummary(row, summaries) {
+        const completed = getResearchSummaryKeys(row)
+          .map((key) => summaries.get(key))
+          .find(Boolean);
+        if (completed) {
+          return completed.summary_text || completed.quick_summary || "Research completed.";
         }
-        board.summary.innerHTML = summaries
-          .map((item) => {
-            const findings = Number(item.finding_count || 0);
-            const gaps = Number(item.gap_count || 0);
-            const countText = `${findings} finding${findings === 1 ? "" : "s"}${
-              gaps ? ` / ${gaps} gap${gaps === 1 ? "" : "s"}` : ""
-            }`;
-            const summaryText =
-              item.summary_text || item.quick_summary || "Research completed.";
-            return `<li>
-              <div class="research-summary-meta">
-                <span class="research-summary-label">${escapeHtml(
-                  item.source_label || item.source_id || "Source",
-                )}</span>
-                <span class="research-summary-counts">${escapeHtml(countText)}</span>
-              </div>
-              <div class="research-summary-body">${escapeHtml(summaryText)}</div>
-            </li>`;
-          })
-          .join("");
+        return row.detail || "Research pending.";
       }
 
       function renderResearchStatusSnapshot(snapshot) {
@@ -1966,82 +1974,55 @@
 
         const board = ensureResearchStatusBoard(turn);
         const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+        const summaries = indexCompletedResearchSummaries(snapshot);
+        const displayRows = rows.length
+          ? rows
+          : Array.from(new Set(summaries.values())).map((item) => ({
+              source_id: item.source_id,
+              source_label: item.source_label,
+              status: "complete",
+              status_label: "Complete",
+            }));
         board.updated.textContent = formatSnapshotTime(snapshot?.generated_at);
-        renderCompletedResearchSummaries(board, snapshot);
-        board.sources.innerHTML = rows
+        if (!displayRows.length) {
+          board.body.innerHTML =
+            '<tr><td colspan="3" class="research-summary-empty">Waiting for research to start.</td></tr>';
+          scrollToBottom();
+          return;
+        }
+        board.body.innerHTML = displayRows
           .map((row) => {
-            const status = escapeHtml(row.status || "pending");
-            return `<div class="research-source-tile ${status}" title="${escapeHtml(
-              row.detail || "",
-            )}">
-              <span class="research-source-dot"></span>
-              <span class="research-source-name">${escapeHtml(
-                row.source_label || row.source_id || "Source",
-              )}</span>
-              <span class="research-source-status">${escapeHtml(
+            const status = getResearchStatusClass(row.status);
+            const summary = getResearchRowSummary(row, summaries);
+            return `<tr class="research-status-row ${status}">
+              <td>
+                <span class="research-status-source">
+                  <span class="research-source-dot"></span>
+                  <span class="research-source-name">${escapeHtml(
+                    row.source_label || row.source_id || "Source",
+                  )}</span>
+                </span>
+              </td>
+              <td><span class="research-source-status">${escapeHtml(
                 row.status_label || "Pending",
-              )}</span>
-            </div>`;
+              )}</span></td>
+              <td><div class="research-summary-body">${escapeHtml(summary)}</div></td>
+            </tr>`;
           })
           .join("");
-        if (!rows.length) {
-          board.sources.innerHTML =
-            '<div class="research-summary-empty">Waiting for research to start.</div>';
-        }
         scrollToBottom();
       }
 
-      function moveSummariesIntoStatusTimeline(turn) {
-        if (turn.summariesMoved) {
+      function removeStatusTrace(turn) {
+        if (!turn) {
           return;
         }
-        turn.summariesMoved = true;
-        turn.summaryEvents.forEach((event) => {
-          addStatusTimelineRow(turn, event.source, event.text);
-        });
-      }
-
-      function collapseStatusTrace(turn) {
-        moveSummariesIntoStatusTimeline(turn);
-        if (!turn.hasResearch) {
-          turn.statusPanel.classList.add("hidden", "collapsed");
-          return;
-        }
-        turn.statusPanel.classList.remove("hidden");
-        turn.statusPanel.classList.add("complete", "collapsed");
-        turn.statusText.textContent = "Research trace";
-        turn.statusButton.setAttribute("aria-expanded", "false");
-      }
-
-      function moveStatusTraceIntoResponse(turn) {
-        if (!turn.trace || !turn.hasResearch) {
-          return;
-        }
-        turn.trace.classList.remove("empty");
-        turn.statusPanel.classList.add("in-response");
-        if (turn.statusPanel.parentElement !== turn.trace) {
-          turn.trace.appendChild(turn.statusPanel);
-        }
-      }
-
-      function completeStatusPanel(turn) {
-        moveSummariesIntoStatusTimeline(turn);
-        const alreadyCompleted = turn.statusEvents.some(
-          (event) => event.source === "Aegis" && event.text === "Response completed.",
-        );
-        if (!alreadyCompleted) {
-          addStatusTimelineRow(turn, "Aegis", "Response completed.");
-        }
-        if (!turn.hasResearch) {
-          turn.statusPanel.classList.add("hidden", "collapsed");
-          turn.trace?.classList.add("empty");
-          return;
-        }
-        turn.statusText.textContent = "Research trace";
-        turn.statusPanel.classList.remove("hidden");
-        turn.statusPanel.classList.add("complete", "collapsed");
-        turn.statusButton.setAttribute("aria-expanded", "false");
-        moveStatusTraceIntoResponse(turn);
+        turn.statusPanel?.remove();
+        turn.statusPanel = null;
+        turn.statusButton = null;
+        turn.statusText = null;
+        turn.statusCount = null;
+        turn.timeline = null;
       }
 
       function finishAssistantTurn() {
@@ -2051,10 +2032,8 @@
         const completedRoot = activeTurn.root;
         const renderedFinal =
           activeTurn.responseStarted && (activeTurn.answerText.trim() || activeTurn.responseShell);
-        if (renderedFinal) {
-          completeStatusPanel(activeTurn);
-        } else if (!activeTurn.waitingForUser) {
-          activeTurn.statusPanel.classList.add("hidden");
+        if (!renderedFinal && !activeTurn.waitingForUser) {
+          activeTurn.statusPanel?.classList.add("hidden");
         }
         if (!activeTurn.responseStarted && !activeTurn.waitingForUser) {
           activeTurn.main.classList.add("empty");
@@ -2072,13 +2051,17 @@
           return;
         }
         turn.waitingForUser = false;
-        turn.statusText.textContent = "Selection received";
-        turn.statusPanel.classList.add("hidden", "collapsed");
-        turn.trace?.classList.add("empty");
+        if (turn.statusText) {
+          turn.statusText.textContent = "Selection received";
+        }
+        turn.statusPanel?.classList.add("hidden", "collapsed");
       }
 
       function addTurnStatus(label, content, options = {}) {
         const turn = beginAssistantTurn();
+        if (turn.responseStarted) {
+          return;
+        }
         if (options.research) {
           turn.hasResearch = true;
         }
@@ -2086,13 +2069,7 @@
         const source = label || "Aegis";
         if (options.summary) {
           const summarySource = String(source).toLowerCase() === "aegis" ? "Status summary" : source;
-          const summaryEvent = { source: summarySource, text };
-          if (turn.summariesMoved || turn.responseStarted) {
-            addStatusTimelineRow(turn, summaryEvent.source, summaryEvent.text);
-          } else {
-            turn.summaryEvents.push(summaryEvent);
-            appendProgressSummary(turn, summaryEvent.source, summaryEvent.text);
-          }
+          appendProgressSummary(turn, summarySource, text);
           scrollToBottom();
           return;
         }
