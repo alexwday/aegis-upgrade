@@ -183,6 +183,10 @@ class LLMClient:
         log_parts.append(f"max_tokens={model_config['max_tokens']}")
         if model_config["temperature"] is not None:
             log_parts.append(f"temp={model_config['temperature']}")
+        log_parts.append(
+            f"configured_reasoning_effort={model_config.get('reasoning_effort') or 'none'}"
+        )
+        log_parts.append(f"reasoning_effort={kwargs.get('reasoning_effort') or 'none'}")
         log_parts.append(f"messages={len(messages)}")
         if tools:
             log_parts.append(f"tools={len(tools)}")

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from aegis_agent.connections.llm_connector import _apply_generation_limits
+from aegis_agent.connections.llm_connector import (
+    _apply_generation_limits,
+    _request_reasoning_effort,
+)
 
 
 def test_gpt_5_models_use_max_completion_tokens() -> None:
@@ -42,3 +45,9 @@ def test_legacy_chat_models_do_not_include_reasoning_effort() -> None:
     _apply_generation_limits(api_params, "gpt-4.1-mini-2025-04-14", 0.5, 2000, "low")
 
     assert api_params == {"temperature": 0.5, "max_tokens": 2000}
+
+
+def test_request_reasoning_effort_reports_only_sent_values() -> None:
+    """Logging helper should distinguish configured from applied reasoning effort."""
+    assert _request_reasoning_effort("gpt-5.4-mini", "low") == "low"
+    assert _request_reasoning_effort("gpt-4.1-mini-2025-04-14", "low") is None

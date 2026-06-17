@@ -259,6 +259,13 @@ def _supports_reasoning_effort(model: str) -> bool:
     return _uses_completion_token_limit(model)
 
 
+def _request_reasoning_effort(model: str, reasoning_effort: Optional[str]) -> Optional[str]:
+    """Return reasoning_effort only when it will be sent to the API."""
+    if reasoning_effort and _supports_reasoning_effort(model):
+        return reasoning_effort
+    return None
+
+
 def _apply_generation_limits(
     api_params: Dict[str, Any],
     model: str,
@@ -270,8 +277,9 @@ def _apply_generation_limits(
     if _uses_completion_token_limit(model):
         if max_tokens:
             api_params["max_completion_tokens"] = max_tokens
-        if reasoning_effort and _supports_reasoning_effort(model):
-            api_params["reasoning_effort"] = reasoning_effort
+        request_reasoning_effort = _request_reasoning_effort(model, reasoning_effort)
+        if request_reasoning_effort:
+            api_params["reasoning_effort"] = request_reasoning_effort
         return
 
     api_params["temperature"] = temperature
@@ -385,6 +393,7 @@ async def complete(
         )
     )
     reasoning_effort = llm_params.get("reasoning_effort", configured_reasoning_effort)
+    request_reasoning_effort = _request_reasoning_effort(model, reasoning_effort)
 
     logger.info(
         "Generating async LLM completion",
@@ -392,6 +401,9 @@ async def complete(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        configured_reasoning_effort=reasoning_effort,
+        reasoning_effort=request_reasoning_effort,
+        reasoning_effort_applied=bool(request_reasoning_effort),
         message_count=len(messages),
     )
 
@@ -489,6 +501,7 @@ async def stream(
         )
     )
     reasoning_effort = llm_params.get("reasoning_effort", configured_reasoning_effort)
+    request_reasoning_effort = _request_reasoning_effort(model, reasoning_effort)
 
     logger.info(
         "Starting async LLM streaming",
@@ -496,6 +509,9 @@ async def stream(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        configured_reasoning_effort=reasoning_effort,
+        reasoning_effort=request_reasoning_effort,
+        reasoning_effort_applied=bool(request_reasoning_effort),
         message_count=len(messages),
     )
 
@@ -619,6 +635,7 @@ async def complete_with_tools(
         )
     )
     reasoning_effort = llm_params.get("reasoning_effort", configured_reasoning_effort)
+    request_reasoning_effort = _request_reasoning_effort(model, reasoning_effort)
 
     logger.info(
         "Generating async LLM completion with tools",
@@ -626,6 +643,9 @@ async def complete_with_tools(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        configured_reasoning_effort=reasoning_effort,
+        reasoning_effort=request_reasoning_effort,
+        reasoning_effort_applied=bool(request_reasoning_effort),
         message_count=len(messages),
         tool_count=len(tools),
     )
@@ -714,6 +734,7 @@ async def stream_with_tools(
         )
     )
     reasoning_effort = llm_params.get("reasoning_effort", configured_reasoning_effort)
+    request_reasoning_effort = _request_reasoning_effort(model, reasoning_effort)
 
     logger.info(
         "Starting async LLM streaming with tools",
@@ -721,6 +742,9 @@ async def stream_with_tools(
         model=model,
         temperature=temperature,
         max_tokens=max_tokens,
+        configured_reasoning_effort=reasoning_effort,
+        reasoning_effort=request_reasoning_effort,
+        reasoning_effort_applied=bool(request_reasoning_effort),
         message_count=len(messages),
         tool_count=len(tools),
     )
