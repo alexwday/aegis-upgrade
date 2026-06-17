@@ -218,12 +218,16 @@ def agent_env(values: Mapping[str, str]) -> OrderedDict[str, str]:
     out["LLM_BASE_URL"] = first(values, "LLM_BASE_URL", "LLM_DEFAULT_URL", default="https://api.openai.com/v1")
     agent_overrides = {
         "LLM_TEMPERATURE_SMALL": ("AGENT_LLM_TEMPERATURE_SMALL", "0.3"),
+        "LLM_REASONING_EFFORT_SMALL": ("AGENT_LLM_REASONING_EFFORT_SMALL", ""),
         "LLM_TEMPERATURE_MEDIUM": ("AGENT_LLM_TEMPERATURE_MEDIUM", "0.5"),
+        "LLM_REASONING_EFFORT_MEDIUM": ("AGENT_LLM_REASONING_EFFORT_MEDIUM", ""),
         "LLM_TEMPERATURE_LARGE": ("AGENT_LLM_TEMPERATURE_LARGE", "0.7"),
+        "LLM_REASONING_EFFORT_LARGE": ("AGENT_LLM_REASONING_EFFORT_LARGE", ""),
     }
     for key in (
         "LLM_MODEL_SMALL",
         "LLM_TEMPERATURE_SMALL",
+        "LLM_REASONING_EFFORT_SMALL",
         "LLM_MAX_TOKENS_SMALL",
         "LLM_TIMEOUT_SMALL",
         "LLM_MAX_RETRIES_SMALL",
@@ -231,6 +235,7 @@ def agent_env(values: Mapping[str, str]) -> OrderedDict[str, str]:
         "LLM_COST_OUTPUT_SMALL",
         "LLM_MODEL_MEDIUM",
         "LLM_TEMPERATURE_MEDIUM",
+        "LLM_REASONING_EFFORT_MEDIUM",
         "LLM_MAX_TOKENS_MEDIUM",
         "LLM_TIMEOUT_MEDIUM",
         "LLM_MAX_RETRIES_MEDIUM",
@@ -238,6 +243,7 @@ def agent_env(values: Mapping[str, str]) -> OrderedDict[str, str]:
         "LLM_COST_OUTPUT_MEDIUM",
         "LLM_MODEL_LARGE",
         "LLM_TEMPERATURE_LARGE",
+        "LLM_REASONING_EFFORT_LARGE",
         "LLM_MAX_TOKENS_LARGE",
         "LLM_TIMEOUT_LARGE",
         "LLM_MAX_RETRIES_LARGE",

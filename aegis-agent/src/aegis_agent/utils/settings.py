@@ -12,6 +12,21 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 
+REASONING_EFFORTS = {"none", "low", "medium", "high", "xhigh", "minimal"}
+
+
+def _optional_reasoning_effort(*keys: str) -> Optional[str]:
+    """Return configured reasoning effort or None when unset/disabled."""
+    for key in keys:
+        value = os.getenv(key, "").strip().lower()
+        if not value:
+            continue
+        if value not in REASONING_EFFORTS:
+            allowed = ", ".join(sorted(REASONING_EFFORTS))
+            raise ValueError(f"{key} must be one of: {allowed}; got {value!r}")
+        return None if value == "none" else value
+    return None
+
 
 @dataclass
 class OAuthConfig:
@@ -47,6 +62,7 @@ class LLMModelConfig:
 
     model: str
     temperature: float
+    reasoning_effort: Optional[str]
     max_tokens: int
     timeout: int
     max_retries: int
@@ -192,6 +208,10 @@ class Config:  # pylint: disable=too-many-instance-attributes
             small=LLMModelConfig(
                 model=os.getenv("LLM_MODEL_SMALL", "gpt-4.1-nano-2025-04-14"),
                 temperature=float(os.getenv("LLM_TEMPERATURE_SMALL", "0.3")),
+                reasoning_effort=_optional_reasoning_effort(
+                    "AGENT_LLM_REASONING_EFFORT_SMALL",
+                    "LLM_REASONING_EFFORT_SMALL",
+                ),
                 max_tokens=int(os.getenv("LLM_MAX_TOKENS_SMALL", "1000")),
                 timeout=int(os.getenv("LLM_TIMEOUT_SMALL", "30")),
                 max_retries=int(os.getenv("LLM_MAX_RETRIES_SMALL", "3")),
@@ -201,6 +221,10 @@ class Config:  # pylint: disable=too-many-instance-attributes
             medium=LLMModelConfig(
                 model=os.getenv("LLM_MODEL_MEDIUM", "gpt-4.1-mini-2025-04-14"),
                 temperature=float(os.getenv("LLM_TEMPERATURE_MEDIUM", "0.5")),
+                reasoning_effort=_optional_reasoning_effort(
+                    "AGENT_LLM_REASONING_EFFORT_MEDIUM",
+                    "LLM_REASONING_EFFORT_MEDIUM",
+                ),
                 max_tokens=int(os.getenv("LLM_MAX_TOKENS_MEDIUM", "2000")),
                 timeout=int(os.getenv("LLM_TIMEOUT_MEDIUM", "60")),
                 max_retries=int(os.getenv("LLM_MAX_RETRIES_MEDIUM", "3")),
@@ -210,6 +234,10 @@ class Config:  # pylint: disable=too-many-instance-attributes
             large=LLMModelConfig(
                 model=os.getenv("LLM_MODEL_LARGE", "gpt-4.1-2025-04-14"),
                 temperature=float(os.getenv("LLM_TEMPERATURE_LARGE", "0.7")),
+                reasoning_effort=_optional_reasoning_effort(
+                    "AGENT_LLM_REASONING_EFFORT_LARGE",
+                    "LLM_REASONING_EFFORT_LARGE",
+                ),
                 max_tokens=int(os.getenv("LLM_MAX_TOKENS_LARGE", "4000")),
                 timeout=int(os.getenv("LLM_TIMEOUT_LARGE", "120")),
                 max_retries=int(os.getenv("LLM_MAX_RETRIES_LARGE", "3")),

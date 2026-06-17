@@ -195,7 +195,7 @@ def _get_model_config(
         default_tier: Default tier if model is None ("small", "medium", "large")
 
     Returns:
-        Tuple of (model, temperature, max_tokens, model_tier)
+        Tuple of (model, temperature, max_tokens, model_tier, reasoning_effort)
     """
     if model is None:
         tier_config = getattr(config.llm, default_tier)
@@ -204,6 +204,7 @@ def _get_model_config(
             temperature or tier_config.temperature,
             max_tokens or tier_config.max_tokens,
             default_tier,
+            tier_config.reasoning_effort,
         )
 
     # Determine tier from model name
@@ -213,6 +214,7 @@ def _get_model_config(
             temperature or config.llm.small.temperature,
             max_tokens or config.llm.small.max_tokens,
             "small",
+            config.llm.small.reasoning_effort,
         )
     if model == config.llm.large.model:
         return (
@@ -220,6 +222,7 @@ def _get_model_config(
             temperature or config.llm.large.temperature,
             max_tokens or config.llm.large.max_tokens,
             "large",
+            config.llm.large.reasoning_effort,
         )
     if model == config.llm.medium.model:
         return (
@@ -227,6 +230,7 @@ def _get_model_config(
             temperature or config.llm.medium.temperature,
             max_tokens or config.llm.medium.max_tokens,
             "medium",
+            config.llm.medium.reasoning_effort,
         )
     # Unknown model, use medium defaults
     return (
@@ -234,6 +238,7 @@ def _get_model_config(
         temperature or config.llm.medium.temperature,
         max_tokens or config.llm.medium.max_tokens,
         "medium",
+        config.llm.medium.reasoning_effort,
     )
 
 
@@ -249,13 +254,24 @@ def _uses_completion_token_limit(model: str) -> bool:
     )
 
 
+def _supports_reasoning_effort(model: str) -> bool:
+    """Return whether the selected model supports reasoning_effort."""
+    return _uses_completion_token_limit(model)
+
+
 def _apply_generation_limits(
-    api_params: Dict[str, Any], model: str, temperature: float, max_tokens: Optional[int]
+    api_params: Dict[str, Any],
+    model: str,
+    temperature: float,
+    max_tokens: Optional[int],
+    reasoning_effort: Optional[str] = None,
 ) -> None:
     """Apply generation parameters compatible with the selected Chat Completions model."""
     if _uses_completion_token_limit(model):
         if max_tokens:
             api_params["max_completion_tokens"] = max_tokens
+        if reasoning_effort and _supports_reasoning_effort(model):
+            api_params["reasoning_effort"] = reasoning_effort
         return
 
     api_params["temperature"] = temperature
@@ -361,9 +377,14 @@ async def complete(
     llm_params = llm_params or {}
 
     # Get model configuration using helper
-    model, temperature, max_tokens, model_tier = _get_model_config(
-        llm_params.get("model"), llm_params.get("temperature"), llm_params.get("max_tokens")
+    model, temperature, max_tokens, model_tier, configured_reasoning_effort = (
+        _get_model_config(
+            llm_params.get("model"),
+            llm_params.get("temperature"),
+            llm_params.get("max_tokens"),
+        )
     )
+    reasoning_effort = llm_params.get("reasoning_effort", configured_reasoning_effort)
 
     logger.info(
         "Generating async LLM completion",
@@ -384,11 +405,15 @@ async def complete(
             "model": model,
             "messages": messages,
         }
-        _apply_generation_limits(api_params, model, temperature, max_tokens)
+        _apply_generation_limits(api_params, model, temperature, max_tokens, reasoning_effort)
 
         # Add any extra parameters
         api_params.update(
-            {k: v for k, v in llm_params.items() if k not in ["model", "temperature", "max_tokens"]}
+            {
+                k: v
+                for k, v in llm_params.items()
+                if k not in ["model", "temperature", "max_tokens", "reasoning_effort"]
+            }
         )
 
         # Time the API call
@@ -456,9 +481,14 @@ async def stream(
     llm_params = llm_params or {}
 
     # Get model configuration using helper
-    model, temperature, max_tokens, model_tier = _get_model_config(
-        llm_params.get("model"), llm_params.get("temperature"), llm_params.get("max_tokens")
+    model, temperature, max_tokens, model_tier, configured_reasoning_effort = (
+        _get_model_config(
+            llm_params.get("model"),
+            llm_params.get("temperature"),
+            llm_params.get("max_tokens"),
+        )
     )
+    reasoning_effort = llm_params.get("reasoning_effort", configured_reasoning_effort)
 
     logger.info(
         "Starting async LLM streaming",
@@ -483,11 +513,15 @@ async def stream(
             "messages": messages,
             "stream": True,
         }
-        _apply_generation_limits(api_params, model, temperature, max_tokens)
+        _apply_generation_limits(api_params, model, temperature, max_tokens, reasoning_effort)
 
         # Add any extra parameters
         api_params.update(
-            {k: v for k, v in llm_params.items() if k not in ["model", "temperature", "max_tokens"]}
+            {
+                k: v
+                for k, v in llm_params.items()
+                if k not in ["model", "temperature", "max_tokens", "reasoning_effort"]
+            }
         )
 
         # Create async stream
@@ -576,12 +610,15 @@ async def complete_with_tools(
     llm_params = llm_params or {}
 
     # Get model configuration using helper (default to large for tools)
-    model, temperature, max_tokens, model_tier = _get_model_config(
-        llm_params.get("model"),
-        llm_params.get("temperature"),
-        llm_params.get("max_tokens"),
-        default_tier="large",  # Tools need better reasoning
+    model, temperature, max_tokens, model_tier, configured_reasoning_effort = (
+        _get_model_config(
+            llm_params.get("model"),
+            llm_params.get("temperature"),
+            llm_params.get("max_tokens"),
+            default_tier="large",  # Tools need better reasoning
+        )
     )
+    reasoning_effort = llm_params.get("reasoning_effort", configured_reasoning_effort)
 
     logger.info(
         "Generating async LLM completion with tools",
@@ -604,11 +641,15 @@ async def complete_with_tools(
             "messages": messages,
             "tools": tools,
         }
-        _apply_generation_limits(api_params, model, temperature, max_tokens)
+        _apply_generation_limits(api_params, model, temperature, max_tokens, reasoning_effort)
 
         # Add any extra parameters
         api_params.update(
-            {k: v for k, v in llm_params.items() if k not in ["model", "temperature", "max_tokens"]}
+            {
+                k: v
+                for k, v in llm_params.items()
+                if k not in ["model", "temperature", "max_tokens", "reasoning_effort"]
+            }
         )
 
         # Time the API call
@@ -664,12 +705,15 @@ async def stream_with_tools(
     logger = get_logger()
     llm_params = llm_params or {}
 
-    model, temperature, max_tokens, model_tier = _get_model_config(
-        llm_params.get("model"),
-        llm_params.get("temperature"),
-        llm_params.get("max_tokens"),
-        default_tier="large",
+    model, temperature, max_tokens, model_tier, configured_reasoning_effort = (
+        _get_model_config(
+            llm_params.get("model"),
+            llm_params.get("temperature"),
+            llm_params.get("max_tokens"),
+            default_tier="large",
+        )
     )
+    reasoning_effort = llm_params.get("reasoning_effort", configured_reasoning_effort)
 
     logger.info(
         "Starting async LLM streaming with tools",
@@ -693,13 +737,13 @@ async def stream_with_tools(
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        _apply_generation_limits(api_params, model, temperature, max_tokens)
+        _apply_generation_limits(api_params, model, temperature, max_tokens, reasoning_effort)
 
         api_params.update(
             {
                 key: value
                 for key, value in llm_params.items()
-                if key not in ["model", "temperature", "max_tokens"]
+                if key not in ["model", "temperature", "max_tokens", "reasoning_effort"]
             }
         )
 
