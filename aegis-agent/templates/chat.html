@@ -1769,6 +1769,8 @@
             label: String(point.label || point.category || point.group || "").trim(),
             group: String(point.group || "").trim(),
             category: String(point.category || point.label || "").trim(),
+            bank_label: String(point.bank_label || "").trim(),
+            period_label: String(point.period_label || "").trim(),
             value: Number(point.value),
             x: Number(point.x),
             y: Number(point.y),
@@ -1790,7 +1792,9 @@
               unit: String(series.unit || artifact?.spec?.unit || "").trim(),
               points: (Array.isArray(series.points) ? series.points : [])
                 .map((point) => ({
-                  label: String(point.label || point.period_label || "").trim(),
+                  label: String(
+                    point.label || point.period_label || point.bank_label || point.group || point.category || "",
+                  ).trim(),
                   bank_label: String(point.bank_label || "").trim(),
                   value: Number(point.value),
                   evidence_ids: Array.isArray(point.evidence_ids) ? point.evidence_ids : [],
@@ -1819,6 +1823,34 @@
         }));
       }
 
+      function chartPointFacts(artifact) {
+        return chartPoints(artifact)
+          .filter((point) => Number.isFinite(point.value))
+          .map((point) => {
+            const chartType = artifact?.spec?.chart_type || "";
+            const periodLabel =
+              point.period_label || point.label || point.group || point.category || point.bank_label || "Period";
+            const periodParts = periodPartsFromLabel(periodLabel);
+            const bankLabel =
+              point.bank_label ||
+              point.group ||
+              (chartType === "heatmap" ? point.category : "") ||
+              (chartType === "trend_bar" || chartType === "trend_line" ? artifact?.spec?.metric_name : point.label) ||
+              artifact?.spec?.metric_name ||
+              "Series";
+            return {
+              bank_label: bankLabel,
+              period_label: periodLabel,
+              fiscal_year: periodParts.fiscal_year,
+              quarter: periodParts.quarter,
+              metric_name: String(artifact?.spec?.metric_name || "").trim(),
+              value: point.value,
+              unit: String(artifact?.spec?.unit || "").trim(),
+              evidence_ids: point.evidence_ids,
+            };
+          });
+      }
+
       function _periodRankFromLabel(label) {
         const match = String(label || "").match(/Q([1-4])\s*(?:FY)?(20\d{2})/i);
         if (match) {
@@ -1828,9 +1860,21 @@
         return year ? Number(year[1]) * 10 : 0;
       }
 
+      function periodPartsFromLabel(label) {
+        const match = String(label || "").match(/Q([1-4])\s*(?:FY)?(20\d{2})/i);
+        return {
+          fiscal_year: match ? Number(match[2]) : 0,
+          quarter: match ? `Q${match[1]}` : "",
+        };
+      }
+
       function chartPeriodRank(fact) {
         const quarterRank = { Q1: 1, Q2: 2, Q3: 3, Q4: 4 };
         return (Number(fact.fiscal_year) || 0) * 10 + (quarterRank[fact.quarter] || 0);
+      }
+
+      function chartRowPeriodRank(row) {
+        return chartPeriodRank(row) || _periodRankFromLabel(row.period_label || row.label);
       }
 
       function chartColor(index) {
@@ -1914,8 +1958,11 @@
       function renderPeerBarChart(artifact, facts) {
         const isTrendBar = artifact?.spec?.chart_type === "trend_bar";
         const sorted = isTrendBar
-          ? [...facts].sort((a, b) => chartPeriodRank(a) - chartPeriodRank(b))
+          ? [...facts].sort((a, b) => chartRowPeriodRank(a) - chartRowPeriodRank(b))
           : [...facts].sort((a, b) => b.value - a.value);
+        if (!sorted.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
         const unit = artifact?.spec?.unit || sorted[0]?.unit || "";
         const width = 680;
         const height = 220;
@@ -2042,7 +2089,10 @@
       }
 
       function renderTrendLineChart(artifact, facts) {
-        const sorted = [...facts].sort((a, b) => chartPeriodRank(a) - chartPeriodRank(b));
+        const sorted = [...facts].sort((a, b) => chartRowPeriodRank(a) - chartRowPeriodRank(b));
+        if (!sorted.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
         const unit = artifact?.spec?.unit || sorted[0]?.unit || "";
         const width = 680;
         const height = 220;
@@ -2292,6 +2342,9 @@
       }
 
       function renderHeatmapChart(artifact, facts) {
+        if (!facts.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
         const unit = artifact?.spec?.unit || facts[0]?.unit || "";
         const banks = uniqueBy(
           [...facts].sort((a, b) => a.bank_label.localeCompare(b.bank_label)),
@@ -2622,11 +2675,12 @@
         const facts = chartFacts(artifact);
         const points = chartPoints(artifact);
         const series = chartSeries(artifact, facts);
+        const pointFacts = chartPointFacts(artifact);
         if (!artifact?.spec || (!facts.length && !points.length && !series.length)) {
           return '<div class="chart-placeholder">Chart data unavailable</div>';
         }
         if (artifact.spec.chart_type === "peer_bar" || artifact.spec.chart_type === "trend_bar") {
-          return renderPeerBarChart(artifact, facts);
+          return renderPeerBarChart(artifact, facts.length ? facts : pointFacts);
         }
         if (artifact.spec.chart_type === "peer_rank_bar") {
           return renderPeerRankBarChart(artifact, facts);
@@ -2635,7 +2689,7 @@
           if (!facts.length && series.length) {
             return renderMultiSeriesLineChart(artifact, facts);
           }
-          return renderTrendLineChart(artifact, facts);
+          return renderTrendLineChart(artifact, facts.length ? facts : pointFacts);
         }
         if (artifact.spec.chart_type === "multi_series_line") {
           return renderMultiSeriesLineChart(artifact, facts);
@@ -2647,7 +2701,7 @@
           return renderDeltaBarChart(artifact, facts);
         }
         if (artifact.spec.chart_type === "heatmap") {
-          return renderHeatmapChart(artifact, facts);
+          return renderHeatmapChart(artifact, facts.length ? facts : pointFacts);
         }
         if (
           artifact.spec.chart_type === "composition_stacked_bar" ||

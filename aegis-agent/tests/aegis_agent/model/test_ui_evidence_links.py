@@ -159,3 +159,34 @@ def test_chat_template_renders_json_chart_artifacts_without_images() -> None:
     assert "chartArtifacts: {}" in html
     assert "asset_url" not in html
     assert "<img src=" not in html
+
+
+def test_chat_template_draws_planner_point_specs() -> None:
+    """Planner-authored point specs should be normalized before SVG rendering."""
+    template = Path(__file__).resolve().parents[3] / "templates" / "chat.html"
+    html = template.read_text(encoding="utf-8")
+
+    assert "function chartPointFacts" in html
+    assert "function periodPartsFromLabel" in html
+    assert "function chartRowPeriodRank" in html
+    assert "point.label || point.period_label || point.bank_label" in html
+    assert "return renderPeerBarChart(artifact, facts.length ? facts : pointFacts);" in html
+    assert "return renderTrendLineChart(artifact, facts.length ? facts : pointFacts);" in html
+    assert "return renderHeatmapChart(artifact, facts.length ? facts : pointFacts);" in html
+
+
+def test_chart_planner_prompt_avoids_mixed_metric_single_axis_charts() -> None:
+    """Broad key-metric comparisons should not become one shared-axis graph."""
+    prompt = (
+        Path(__file__).resolve().parents[4]
+        / "aegis-prompts"
+        / "aegis_agent"
+        / "chart_planner.yaml"
+    )
+    text = prompt.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "Do not combine different metrics or units on a single shared-axis chart" in normalized
+    assert "small_multiple_panel" in text
+    assert "one metric per panel" in normalized
+    assert "every point must include a label" in normalized

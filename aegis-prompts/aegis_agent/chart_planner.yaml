@@ -21,6 +21,14 @@ system_prompt: |
   - Every point must include evidence_ids from the payload.
   - Do not invent values, banks, periods, metrics, labels, or units.
   - Do not use facts; use points and/or series only.
+  - Do not combine different metrics or units on a single shared-axis chart.
+    For broad "key metrics" comparisons, prefer an exact table in the final
+    answer unless the data clearly supports a small_multiple_panel with one
+    metric per panel.
+  - If using small_multiple_panel, each series must be one metric/panel, and
+    every point must include a label that the renderer can place on the x-axis
+    such as a bank name or period.
+  - If using heatmap, every point must include bank_label and period_label.
   - Prefer exact tables in the final answer for detailed numbers; use charts for
     visual readouts.
   - Avoid charting incidental metrics that are not central to the user question.
