@@ -11,6 +11,7 @@ from typing import Any, AsyncGenerator, Dict, Iterable, List, Mapping, Optional
 from ...connections.llm_connector import stream_with_tools
 from ...utils.logging import get_logger
 from ...utils.prompt_loader import load_prompt_from_db
+from .chart_slots import ChartSlotStreamProcessor, chart_slot_instruction_text
 from .charts import chart_instruction_text_from_artifacts
 from .schemas import DEFAULT_DOCUMENT_SOURCES, FinalResponseShell
 from .tools import AGENT_TOOLS, dispatch_tool_call
@@ -83,12 +84,12 @@ def _source_scope_message(context: Dict[str, Any]) -> str:
 
 def _final_response_protocol_message(context: Dict[str, Any]) -> str:
     """Build dynamic final-answer streaming instructions."""
-    chart_instruction = str(context.get("chart_instruction") or "").strip()
-    if not chart_instruction:
-        chart_instruction = (
-            "No chart-planner-approved chart options are available yet. Do not include chart "
-            "markers and do not create ad hoc markdown charts."
-        )
+    prior_chart_instruction = str(context.get("chart_instruction") or "").strip()
+    chart_instruction_parts = []
+    if prior_chart_instruction:
+        chart_instruction_parts.append(prior_chart_instruction)
+    chart_instruction_parts.append(chart_slot_instruction_text())
+    chart_instruction = "\n".join(chart_instruction_parts)
     return (
         "Final response streaming protocol: after research is complete, do not call "
         "start_final_response for normal final answers. Instead, begin the final assistant "
@@ -205,6 +206,7 @@ async def _stream_model_step(
     content_parts: List[str] = []
     tool_calls_by_index: Dict[int, Dict[str, Any]] = {}
     shell_parser = _FinalShellStreamParser() if parse_final_shell else None
+    slot_processor = ChartSlotStreamProcessor(context) if stream_content else None
 
     async for chunk in stream_with_tools(
         messages=messages,
@@ -221,9 +223,12 @@ async def _stream_model_step(
             if stream_content:
                 if shell_parser is not None:
                     for event in shell_parser.push(content_delta):
-                        yield {"event": event}
+                        for processed_event in _process_chart_slot_event(event, slot_processor):
+                            yield {"event": processed_event}
                 else:
-                    yield {"event": {"type": "agent", "name": "aegis", "content": content_delta}}
+                    event = {"type": "agent", "name": "aegis", "content": content_delta}
+                    for processed_event in _process_chart_slot_event(event, slot_processor):
+                        yield {"event": processed_event}
         async for event in _drain_ready_background_events(context):
             yield {"event": event}
 
@@ -254,9 +259,23 @@ async def _stream_model_step(
         yield {"event": {"type": "agent", "name": "aegis", "content": "".join(content_parts)}}
     elif stream_content and shell_parser is not None:
         for event in shell_parser.finish():
+            for processed_event in _process_chart_slot_event(event, slot_processor):
+                yield {"event": processed_event}
+    if stream_content and slot_processor is not None:
+        for event in slot_processor.finish():
             yield {"event": event}
 
     yield {"assistant_message": assistant_message}
+
+
+def _process_chart_slot_event(
+    event: Dict[str, Any],
+    slot_processor: Optional[ChartSlotStreamProcessor],
+) -> List[Dict[str, Any]]:
+    """Replace chart slots in streamed agent events and emit pending chart artifacts."""
+    if slot_processor is None or event.get("type") != "agent":
+        return [event]
+    return slot_processor.push(str(event.get("content") or ""))
 
 
 class _FinalShellStreamParser:
@@ -358,6 +377,38 @@ async def _drain_ready_background_events(context: Dict[str, Any]) -> AsyncGenera
         yield queue.get_nowait()
 
 
+async def _drain_chart_worker_events(context: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+    """Drain chart worker events until all launched chart workers have completed."""
+    queue: Optional[asyncio.Queue] = context.get("background_event_queue")
+    tasks: List[asyncio.Task] = [
+        task for task in context.get("chart_worker_tasks", []) if isinstance(task, asyncio.Task)
+    ]
+    if queue is None or not tasks:
+        return
+
+    while True:
+        while not queue.empty():
+            yield queue.get_nowait()
+
+        pending = [task for task in tasks if not task.done()]
+        if not pending:
+            break
+
+        done, _pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            try:
+                task.result()
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                get_logger().warning(
+                    "chart_slot.worker_task_failed",
+                    execution_id=context.get("execution_id"),
+                    error=str(exc),
+                )
+
+    while not queue.empty():
+        yield queue.get_nowait()
+
+
 async def _drain_tool_events(
     tasks: List[asyncio.Task],
     output_queue: asyncio.Queue,
@@ -447,6 +498,8 @@ async def run_aegis_agent(
 
         if not tool_calls:
             async for event in _drain_ready_background_events(context):
+                yield event
+            async for event in _drain_chart_worker_events(context):
                 yield event
             return
 

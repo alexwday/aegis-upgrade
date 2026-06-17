@@ -300,13 +300,14 @@ async def test_run_research_dispatches_all_document_sources(monkeypatch) -> None
     monkeypatch.setattr("aegis_agent.model.agents.research._load_document_retriever", fake_loader)
 
     queue = asyncio.Queue()
+    context = {"execution_id": "test"}
     result = await run_research_tool(
         {
             "question": "capital",
             "sources": DOCUMENT_SOURCES,
             "combinations": [{"bank_symbol": "RY-CA", "fiscal_year": 2026, "quarter": "Q1"}],
         },
-        {"execution_id": "test"},
+        context,
         queue,
     )
 
@@ -321,6 +322,9 @@ async def test_run_research_dispatches_all_document_sources(monkeypatch) -> None
     assert "[[E" in result["dropdown_markdown"]
     assert "{{S3_LINK" not in result["dropdown_markdown"]
     assert {item["source"] for item in result["coverage"]} == set(DOCUMENT_SOURCES)
+    assert result["chart_options"] == []
+    assert context["latest_research_result"].status == "success"
+    assert not any(event["type"] == "chart_artifact" for event in events)
     assert [event["name"] for event in events if event["type"] == "subagent"] == DOCUMENT_SOURCES
     assert all(
         "[[E" in event["content"]

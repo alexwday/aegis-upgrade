@@ -156,6 +156,8 @@ def test_chat_template_renders_json_chart_artifacts_without_images() -> None:
     assert 'artifact.spec.chart_type === "scatter_plot"' in html
     assert 'artifact.spec.chart_type === "small_multiple_panel"' in html
     assert 'artifact.spec.chart_type === "trend_bar"' in html
+    assert 'status === "hidden"' in html
+    assert "Loading chart" in html
     assert "chartArtifacts: {}" in html
     assert "asset_url" not in html
     assert "<img src=" not in html
@@ -175,18 +177,17 @@ def test_chat_template_draws_planner_point_specs() -> None:
     assert "return renderHeatmapChart(artifact, facts.length ? facts : pointFacts);" in html
 
 
-def test_chart_planner_prompt_avoids_mixed_metric_single_axis_charts() -> None:
-    """Broad key-metric comparisons should not become one shared-axis graph."""
+def test_agent_system_prompt_uses_async_chart_slots_for_mixed_metrics() -> None:
+    """Broad key-metric comparisons should be requested as async small multiples."""
     prompt = (
         Path(__file__).resolve().parents[4]
         / "aegis-prompts"
         / "aegis_agent"
-        / "chart_planner.yaml"
+        / "system.yaml"
     )
     text = prompt.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
-    assert "Do not combine different metrics or units on a single shared-axis chart" in normalized
+    assert "Use async interactive chart slots proactively" in normalized
     assert "small_multiple_panel" in text
-    assert "one metric per panel" in normalized
-    assert "every point must include a label" in normalized
+    assert "one shared-axis chart across different metrics or units" in normalized

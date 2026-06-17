@@ -2725,6 +2725,9 @@
         void evidenceRegistry;
         const artifact = chartArtifacts[chartId];
         const status = artifact?.status || "pending";
+        if (status === "hidden") {
+          return "";
+        }
         const title = artifact?.title || `Chart ${chartId}`;
         const subtitle = artifact?.subtitle || "Preparing source-grounded chart";
         if (status === "ready" && artifact?.spec) {
@@ -2750,7 +2753,7 @@
             <div class="chart-title">${escapeHtml(title)}</div>
             <div class="chart-subtitle">${escapeHtml(subtitle)}</div>
           </div>
-          <div class="chart-frame"><div class="chart-placeholder">Preparing chart</div></div>
+          <div class="chart-frame"><div class="chart-placeholder">Loading chart</div></div>
         </aside>`;
       }
 

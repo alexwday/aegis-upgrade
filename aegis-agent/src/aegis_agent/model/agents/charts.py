@@ -857,9 +857,143 @@ def chart_instruction_text_from_artifacts(artifacts: Mapping[str, Any]) -> str:
 
 
 def build_chart_options(findings: Sequence[Finding], question: str = "") -> List[ChartOption]:
-    """Return no deterministic charts; runtime charts are authored by the planner."""
-    _ = findings, question
-    return []
+    """Build deterministic source-grounded chart candidates from structured findings."""
+    facts = _dedupe_facts(_facts_from_findings(findings))
+    groups = _group_facts(facts)
+    candidates: List[ChartCandidate] = []
+
+    for (_metric_key_value, unit), group in groups.items():
+        _ = _metric_key_value
+        if len(group) < 2:
+            continue
+        banks = sorted({fact.bank_label for fact in group})
+        periods = sorted(
+            {(fact.fiscal_year, fact.quarter, fact.period_label) for fact in group},
+            key=lambda item: (item[0], QUARTER_ORDER.get(item[1], 0)),
+        )
+        if len(banks) >= 2 and len(periods) == 1:
+            candidates.append(
+                ChartCandidate(
+                    _score_chart("peer_rank_bar", group, question),
+                    _make_option(
+                        "peer_rank_bar",
+                        group,
+                        title=f"{group[0].metric_name} peer ranking",
+                        subtitle=f"{periods[0][2]} | {unit or 'reported value'}",
+                        x_label=unit or "Reported value",
+                        y_label="Bank",
+                    ),
+                )
+            )
+        elif len(banks) == 1 and len(periods) >= 2:
+            candidates.append(
+                ChartCandidate(
+                    _score_chart("trend_line", group, question),
+                    _make_option(
+                        "trend_line",
+                        group,
+                        title=f"{banks[0]} {group[0].metric_name} trend",
+                        subtitle=f"{periods[0][2]} to {periods[-1][2]} | {unit or 'reported value'}",
+                        x_label="Period",
+                        y_label=unit or "Reported value",
+                    ),
+                )
+            )
+            candidates.append(
+                ChartCandidate(
+                    _score_chart("trend_bar", group, question) - 12,
+                    _make_option(
+                        "trend_bar",
+                        group,
+                        title=f"{banks[0]} {group[0].metric_name} by period",
+                        subtitle=f"{periods[0][2]} to {periods[-1][2]} | {unit or 'reported value'}",
+                        x_label="Period",
+                        y_label=unit or "Reported value",
+                    ),
+                )
+            )
+            if len(periods) == 2:
+                candidates.append(
+                    ChartCandidate(
+                        _score_chart("delta_bar", group, question),
+                        _make_delta_option(group, f"{banks[0]} {group[0].metric_name} change"),
+                    )
+                )
+        elif len(banks) >= 2 and len(periods) >= 2:
+            if len(periods) == 2:
+                candidates.append(
+                    ChartCandidate(
+                        _score_chart("slopegraph", group, question),
+                        _make_option(
+                            "slopegraph",
+                            group,
+                            title=f"{group[0].metric_name} peer movement",
+                            subtitle=f"{periods[0][2]} to {periods[-1][2]} | {unit or 'reported value'}",
+                            x_label="Period",
+                            y_label=unit or "Reported value",
+                        ),
+                    )
+                )
+                candidates.append(
+                    ChartCandidate(
+                        _score_chart("delta_bar", group, question) - 6,
+                        _make_delta_option(group, f"{group[0].metric_name} change across peers"),
+                    )
+                )
+            if len(periods) >= 3:
+                candidates.append(
+                    ChartCandidate(
+                        _score_chart("multi_series_line", group, question),
+                        _make_multi_series_option(group),
+                    )
+                )
+            candidates.append(
+                ChartCandidate(
+                    _score_chart("heatmap", group, question)
+                    + (12 if len(banks) * len(periods) >= 12 else -8),
+                    _make_option(
+                        "heatmap",
+                        group,
+                        title=f"{group[0].metric_name} by bank and period",
+                        subtitle=f"{len(banks)} banks x {len(periods)} periods | {unit or 'reported value'}",
+                        x_label="Period",
+                        y_label="Bank",
+                    ),
+                )
+            )
+            latest_year, latest_quarter, latest_label = periods[-1]
+            latest_group = [
+                fact
+                for fact in group
+                if fact.fiscal_year == latest_year and fact.quarter == latest_quarter
+            ]
+            if len({fact.bank_label for fact in latest_group}) >= 2:
+                candidates.append(
+                    ChartCandidate(
+                        _score_chart("peer_rank_bar", latest_group, question) - 10,
+                        _make_option(
+                            "peer_rank_bar",
+                            latest_group,
+                            title=f"{group[0].metric_name} latest peer ranking",
+                            subtitle=f"{latest_label} | {unit or 'reported value'}",
+                            x_label=unit or "Reported value",
+                            y_label="Bank",
+                        ),
+                    )
+                )
+
+    candidates.extend(_scatter_candidates_from_facts(facts, question))
+    candidates.extend(_small_multiple_candidates_from_facts(facts, question))
+    candidates.extend(_table_chart_candidates(findings, question))
+
+    filtered = _dedupe_candidates(
+        candidate for candidate in candidates if candidate.option.evidence_ids
+    )
+    filtered = sorted(filtered, key=lambda candidate: candidate.score, reverse=True)
+    options = [candidate.option for candidate in filtered[:MAX_CHART_OPTIONS]]
+    for index, option in enumerate(options, start=1):
+        option.chart_id = f"C{index}"
+    return options
 
 
 def publish_chart_artifacts(

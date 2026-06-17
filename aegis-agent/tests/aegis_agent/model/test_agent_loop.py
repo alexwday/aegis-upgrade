@@ -8,7 +8,13 @@ from aegis_agent.model.agents.aegis_agent import (
     _source_scope_message,
     run_aegis_agent,
 )
-from aegis_agent.model.agents.schemas import DEFAULT_DOCUMENT_SOURCES
+from aegis_agent.model.agents.schemas import (
+    DEFAULT_DOCUMENT_SOURCES,
+    EvidenceReference,
+    Finding,
+    MetricObservation,
+    ResearchResult,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -326,6 +332,141 @@ async def test_agent_streams_inline_shell_without_final_tool_call(monkeypatch) -
     assert events[0]["content"]["summary"]["headline"] == "RBC CET1 was solid"
     assert events[1]["content"] == "RBC reported CET1 strength "
     assert events[2]["content"] == "supported by disclosures. [[E1]]"
+
+
+@pytest.mark.asyncio
+async def test_agent_chart_slot_streams_loading_then_ready_artifact(monkeypatch) -> None:
+    """Final-answer chart slots should become loading cards before worker hydration."""
+    calls = 0
+
+    async def fake_stream_with_tools(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "research-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "run_research",
+                                        "arguments": (
+                                            '{"question":"Compare CET1",'
+                                            '"sources":["investor_slides"],'
+                                            '"combinations":['
+                                            '{"bank_symbol":"RY-CA","fiscal_year":2026,"quarter":"Q2"},'
+                                            '{"bank_symbol":"TD-CA","fiscal_year":2026,"quarter":"Q2"}]}'
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+            return
+        shell = (
+            '<aegis_final_shell>{"render_mode":"custom","summary":null,'
+            '"tiles":[],"body_style":"user_requested_format"}</aegis_final_shell>'
+        )
+        slot = (
+            '[[CHART_SLOT:{"slot_id":"C1","title":"TD vs RBC CET1",'
+            '"chart_type":"peer_rank_bar","intent":"Compare CET1 ratio for TD and RBC",'
+            '"banks":["TD-CA","RY-CA"],"periods":["Q2 2026"],"metrics":["CET1 ratio"]}]]'
+        )
+        yield {"choices": [{"delta": {"content": shell + "Lead\n" + slot + "\nTail"}}]}
+
+    async def fake_run_research_tool(_arguments, context, *_args, **_kwargs):
+        findings = [
+            Finding(
+                combo_label="Investor slides: RY-CA Q2 2026",
+                summary="RY-CA CET1 ratio was 13.7%.",
+                finding_type="quantitative",
+                metric=MetricObservation(
+                    metric_name="CET1 ratio",
+                    metric_value="13.7",
+                    unit="%",
+                    period="Q2 2026",
+                ),
+                evidence_refs=[
+                    EvidenceReference(
+                        evidence_id="E1",
+                        source_id="investor_slides",
+                        source_label="Investor slides",
+                        display_label="Investor slides E1",
+                    )
+                ],
+            ),
+            Finding(
+                combo_label="Investor slides: TD-CA Q2 2026",
+                summary="TD-CA CET1 ratio was 13.1%.",
+                finding_type="quantitative",
+                metric=MetricObservation(
+                    metric_name="CET1 ratio",
+                    metric_value="13.1",
+                    unit="%",
+                    period="Q2 2026",
+                ),
+                evidence_refs=[
+                    EvidenceReference(
+                        evidence_id="E2",
+                        source_id="investor_slides",
+                        source_label="Investor slides",
+                        display_label="Investor slides E2",
+                    )
+                ],
+            ),
+        ]
+        context["latest_research_result"] = ResearchResult(
+            status="success",
+            quick_summary="Research complete",
+            findings=findings,
+            evidence_registry={
+                "investor_slides": {
+                    "E1": findings[0].evidence_refs[0],
+                    "E2": findings[1].evidence_refs[0],
+                }
+            },
+        )
+        return {"status": "success", "quick_summary": "Research complete", "findings": []}
+
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.aegis_agent.stream_with_tools",
+        fake_stream_with_tools,
+    )
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.tools.run_research_tool",
+        fake_run_research_tool,
+    )
+
+    events = [
+        event
+        async for event in run_aegis_agent(
+            [{"role": "user", "content": "Compare TD and RBC CET1 for Q2 2026."}],
+            {"execution_id": "test"},
+        )
+    ]
+
+    pending_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["type"] == "chart_artifact" and event["content"]["status"] == "pending"
+    )
+    ready_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["type"] == "chart_artifact" and event["content"]["status"] == "ready"
+    )
+
+    assert events[0]["type"] == "final_response_start"
+    assert any(event.get("content") == "[[CHART:C1]]" for event in events)
+    assert events[pending_index]["content"]["title"] == "TD vs RBC CET1"
+    assert pending_index < ready_index
+    assert events[ready_index]["content"]["spec"]["chart_type"] == "peer_rank_bar"
 
 
 @pytest.mark.asyncio

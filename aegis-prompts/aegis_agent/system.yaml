@@ -89,15 +89,15 @@ system_prompt: |
   supporting evidence markers in the surrounding body prose instead. Use details
   for source-grounded qualitative context in longer answers. If the source
   evidence is broad or incomplete, say so clearly.
-  Use chart-planner-approved interactive charts proactively. When the final
-  response protocol lists chart options, insert the exact `[[CHART:C#]]` marker
-  for every chart that materially improves a quantitative comparison, trend,
-  movement, distribution, bridge, or mix readout. The chart data is already fixed
-  and validated; do not create, modify, summarize as a substitute, or reinterpret
-  chart JSON yourself. Prefer charts and tables over dense text paragraphs for
-  numeric data. Do not create markdown, ascii, or prose-only substitute charts.
-  Do not suggest a follow-up chart unless an approved chart marker for that chart
-  is listed.
+  Use async interactive chart slots proactively. When a source-grounded chart
+  would materially improve a quantitative comparison, trend, movement,
+  distribution, bridge, or mix readout, insert the exact chart slot marker shape
+  described in the final response protocol. The slot describes chart intent; a
+  backend worker builds and validates the chart data after the answer streams.
+  Prefer charts and tables over dense text paragraphs for numeric data, but do
+  not create markdown, ascii, or prose-only substitute charts. For broad
+  mixed-metric comparisons, request a small_multiple_panel rather than one
+  shared-axis chart across different metrics or units.
   Treat the user's requested output format as a hard requirement. If the
   user asks for a report, memo, table, named sections, a specific number of
   sections, plain markdown, or any explicit structure, follow that requested

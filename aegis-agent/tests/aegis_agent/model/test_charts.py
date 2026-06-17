@@ -322,20 +322,71 @@ def test_table_values_can_validate_planner_composition_chart() -> None:
     assert len(options[0].spec.points) == 3
 
 
-def test_heuristic_chart_generation_is_disabled() -> None:
-    """The old deterministic generator should not create charts directly."""
-    assert build_chart_options([_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")]) == []
+def test_deterministic_chart_generation_uses_source_grounded_findings() -> None:
+    """Deterministic chart candidates should use only retrieved structured findings."""
+    options = build_chart_options(
+        [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],
+        "Compare CET1 ratio for RBC and TD.",
+    )
+
+    assert len(options) >= 1
+    assert options[0].chart_type == "peer_rank_bar"
+    assert options[0].evidence_ids == ["E1", "E2"]
+    assert options[0].spec.facts[0].metric_name == "CET1 ratio"
 
 
 @pytest.mark.asyncio
-async def test_planner_failure_returns_no_charts_without_fallback(monkeypatch) -> None:
-    """Planner errors should not trigger deterministic fallback charts."""
+async def test_planner_failure_returns_no_charts_without_slot_worker(monkeypatch) -> None:
+    """Planner errors should not trigger the old pre-answer fallback path."""
 
     def fake_prompt(*args, **kwargs):
         _ = args, kwargs
         raise LookupError("missing prompt")
 
     monkeypatch.setattr(charts, "load_prompt_from_db", fake_prompt)
+
+    options = await plan_chart_options(
+        [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],
+        "Compare CET1 ratio for RBC and TD.",
+        {"execution_id": "test", "auth_config": {"token": "token"}},
+    )
+
+    assert options == []
+
+
+@pytest.mark.asyncio
+async def test_empty_planner_plan_returns_no_preplanned_charts(monkeypatch) -> None:
+    """A conservative empty planner response should not prepublish charts."""
+
+    def fake_prompt(*args, **kwargs):
+        _ = args, kwargs
+        return {
+            "system_prompt": "Plan charts.",
+            "user_prompt": "{{question}}\n{{chart_templates}}\n{{research_payload}}",
+            "tool_definition": charts.DEFAULT_CHART_PLANNER_TOOL,
+        }
+
+    async def fake_complete_with_tools(messages, tools, context, llm_params):
+        _ = messages, tools, context, llm_params
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "submit_chart_plan",
+                                    "arguments": json.dumps({"charts": []}),
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(charts, "load_prompt_from_db", fake_prompt)
+    monkeypatch.setattr(charts, "complete_with_tools", fake_complete_with_tools)
 
     options = await plan_chart_options(
         [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],

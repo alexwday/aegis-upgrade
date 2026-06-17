@@ -18,7 +18,6 @@ from ...connections.postgres_connector import get_connection
 from ...utils.logging import get_logger
 from ...utils.monitor import add_monitor_entry
 from ...utils.settings import config
-from .charts import chart_instruction_text, plan_chart_options, publish_chart_artifacts
 from .progress import ResearchProgressStore, emit_event
 from .schemas import (
     BankPeriodCombination,
@@ -1298,12 +1297,8 @@ async def run_research_tool(
             for source, result in zip(request.sources, gathered_results)
         ]
         result = _aggregate_results(source_results)
-        chart_options = await plan_chart_options(result.findings, request.question, context)
-        result.chart_options = [
-            option.model_dump(mode="json") for option in chart_options
-        ]
-        context["chart_instruction"] = chart_instruction_text(chart_options)
-        publish_chart_artifacts(chart_options, context)
+        context["latest_research_result"] = result
+        context["latest_research_question"] = request.question
         source_dropdowns = [
             _format_source_result_dropdown(source, source_result)
             for source, source_result in zip(request.sources, source_results)
