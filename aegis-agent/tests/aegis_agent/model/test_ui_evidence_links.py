@@ -67,12 +67,14 @@ def test_chat_template_renders_research_tables_and_lists() -> None:
     html = template.read_text(encoding="utf-8")
 
     assert "function renderMarkdownTable" in html
+    assert "function renderTableCellMarkdown" in html
     assert "function isMarkdownTableStart" in html
     assert "function consumeList" in html
     assert "research-table-wrap" in html
     assert "research-table" in html
     assert ".final-body ul" in html
     assert ".evidence-content .research-table" in html
+    assert 'renderInlineMarkdown(row[cellIndex] || "", evidenceRegistry)' not in html
 
 
 def test_chat_template_uses_single_research_status_snapshot_board() -> None:
@@ -138,6 +140,13 @@ def test_chat_template_renders_json_chart_artifacts_without_images() -> None:
     assert "function renderWaterfallChart" in html
     assert "function renderScatterPlotChart" in html
     assert "function renderSmallMultiplePanelChart" in html
+    assert "function chartPoints" in html
+    assert "function chartSeries" in html
+    assert "renderEvidenceIdChips" not in html
+    assert 'Interactive source-grounded chart</span><span>' not in html
+    assert "artifact?.spec?.x_label" in html
+    assert "artifact?.spec?.y_label" in html
+    assert "Chart data unavailable" in html
     assert 'artifact.spec.chart_type === "peer_rank_bar"' in html
     assert 'artifact.spec.chart_type === "multi_series_line"' in html
     assert 'artifact.spec.chart_type === "slopegraph"' in html

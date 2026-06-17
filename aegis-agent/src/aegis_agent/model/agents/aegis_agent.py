@@ -86,7 +86,7 @@ def _final_response_protocol_message(context: Dict[str, Any]) -> str:
     chart_instruction = str(context.get("chart_instruction") or "").strip()
     if not chart_instruction:
         chart_instruction = (
-            "No backend-approved chart options are available yet. Do not include chart "
+            "No chart-planner-approved chart options are available yet. Do not include chart "
             "markers and do not create ad hoc markdown charts."
         )
     return (

@@ -1000,18 +1000,10 @@
       .chart-foot {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        flex-wrap: wrap;
         gap: 6px;
         padding: 0 10px 9px;
         color: var(--generated-muted);
         font-size: 10px;
-      }
-
-      .chart-foot .citation-chip {
-        border-color: rgba(255, 255, 255, 0.2);
-        background: var(--generated-soft-strong);
-        color: var(--generated-text);
       }
 
       .answer-section h3 {
@@ -1673,6 +1665,12 @@
         return renderEvidenceMarkers(html, evidenceRegistry);
       }
 
+      function renderTableCellMarkdown(value) {
+        let html = stripEvidenceMarkers(value);
+        html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+        return html;
+      }
+
       function measureTableCellText(value) {
         return stripEvidenceMarkers(value)
           .replace(/\*\*/g, "")
@@ -1726,12 +1724,12 @@
           .map((width) => `<col style="width: ${width}px" />`)
           .join("")}</colgroup>`;
         const headerHtml = headers
-          .map((cell) => `<th>${renderInlineMarkdown(cell, evidenceRegistry)}</th>`)
+          .map((cell) => `<th>${renderTableCellMarkdown(cell)}</th>`)
           .join("");
         const rowHtml = rows
           .map((row) => {
             const cells = headers.map((_, cellIndex) =>
-              `<td>${renderInlineMarkdown(row[cellIndex] || "", evidenceRegistry)}</td>`,
+              `<td>${renderTableCellMarkdown(row[cellIndex] || "")}</td>`,
             );
             return `<tr>${cells.join("")}</tr>`;
           })
@@ -1745,14 +1743,6 @@
           html: tableHtml,
           nextIndex: index,
         };
-      }
-
-      function renderEvidenceIdChips(evidenceIds = [], evidenceRegistry = {}) {
-        if (!Array.isArray(evidenceIds) || !evidenceIds.length) {
-          return "";
-        }
-        const markers = evidenceIds.map((id) => `[[${id}]]`).join("");
-        return renderEvidenceMarkers(markers, evidenceRegistry);
       }
 
       function chartFacts(artifact) {
@@ -1997,8 +1987,8 @@
         }
         const unit = artifact?.spec?.unit || rows[0]?.unit || "";
         const width = 680;
-        const height = Math.max(190, 76 + rows.length * 28);
-        const margin = { top: 18, right: 76, bottom: 28, left: 118 };
+        const height = Math.max(205, 86 + rows.length * 28);
+        const margin = { top: 18, right: 76, bottom: 44, left: 118 };
         const plotWidth = width - margin.left - margin.right;
         const plotHeight = height - margin.top - margin.bottom;
         const [xMin, xMax] = chartExtent(rows.map((row) => row.value), true);
@@ -2042,6 +2032,12 @@
           }" />
           <text class="chart-tick" x="${avgX.toFixed(1)}" y="${margin.top - 5}" text-anchor="middle">avg</text>
           ${bars}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 5}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || unit || "Reported value",
+          )}</text>
+          <text class="chart-axis-label" x="17" y="${height / 2}" text-anchor="middle" transform="rotate(-90 17 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || "Bank")}</text>
         </svg>`;
       }
 
@@ -2144,6 +2140,12 @@
           ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, unit)}
           ${paths}
           ${xLabels}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 4}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Period",
+          )}</text>
+          <text class="chart-axis-label" x="16" y="${height / 2}" text-anchor="middle" transform="rotate(-90 16 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || unit || "Value")}</text>
         </svg>`;
       }
 
@@ -2255,6 +2257,9 @@
             margin.top + plotHeight
           }" />
           ${bars}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 4}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || `Change${unit ? ` (${unit})` : ""}`,
+          )}</text>
         </svg>`;
       }
 
@@ -2443,6 +2448,12 @@
           <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
           ${bars}
           ${legend}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 5}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Group",
+          )}</text>
+          <text class="chart-axis-label" x="17" y="${height / 2}" text-anchor="middle" transform="rotate(-90 17 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || unit || "Value")}</text>
         </svg>`;
       }
 
@@ -2499,6 +2510,12 @@
           <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
           ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, unit)}
           ${bars}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 5}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Driver",
+          )}</text>
+          <text class="chart-axis-label" x="16" y="${height / 2}" text-anchor="middle" transform="rotate(-90 16 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || unit || "Value")}</text>
         </svg>`;
       }
 
@@ -2595,6 +2612,9 @@
         )}" preserveAspectRatio="xMidYMid meet">
           <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
           ${panels}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 5}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Period",
+          )}</text>
         </svg>`;
       }
 
@@ -2648,11 +2668,11 @@
       }
 
       function renderChartCard(chartId, evidenceRegistry = {}, chartArtifacts = {}) {
+        void evidenceRegistry;
         const artifact = chartArtifacts[chartId];
         const status = artifact?.status || "pending";
         const title = artifact?.title || `Chart ${chartId}`;
         const subtitle = artifact?.subtitle || "Preparing source-grounded chart";
-        const evidenceHtml = renderEvidenceIdChips(artifact?.evidence_ids || [], evidenceRegistry);
         if (status === "ready" && artifact?.spec) {
           return `<figure class="chart-card ready" data-chart-id="${escapeHtml(chartId)}">
             <figcaption class="chart-head">
@@ -2660,7 +2680,7 @@
               <div class="chart-subtitle">${escapeHtml(subtitle)}</div>
             </figcaption>
             <div class="chart-frame">${renderChartGraphic(artifact)}</div>
-            <div class="chart-foot"><span>Interactive source-grounded chart</span><span>${evidenceHtml}</span></div>
+            <div class="chart-foot"><span>Interactive source-grounded chart</span></div>
           </figure>`;
         }
         if (status === "error") {

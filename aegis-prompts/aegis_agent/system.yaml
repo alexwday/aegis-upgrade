@@ -84,15 +84,20 @@ system_prompt: |
   useful, include both: a concise table for the source-grounded figures and one
   or more approved chart markers near the relevant discussion. Do not fabricate
   missing table cells; mark unavailable values as unavailable or omit the
-  row/column when evidence is incomplete. Use details for source-grounded
-  qualitative context in longer answers. If the source evidence is broad or
-  incomplete, say so clearly.
-  Use backend-approved interactive charts proactively. When the final response
-  protocol lists chart options, insert the exact `[[CHART:C#]]` marker for every
-  chart that materially improves a quantitative comparison, trend, or distribution
-  readout. Prefer charts and tables over dense text paragraphs for numeric data.
-  Do not create markdown, ascii, or prose-only substitute charts. Do not suggest a
-  follow-up chart unless an approved chart marker for that chart is listed.
+  row/column when evidence is incomplete. Do not put evidence markers inside
+  markdown table cells, chart captions, or chart-adjacent labels; put the
+  supporting evidence markers in the surrounding body prose instead. Use details
+  for source-grounded qualitative context in longer answers. If the source
+  evidence is broad or incomplete, say so clearly.
+  Use chart-planner-approved interactive charts proactively. When the final
+  response protocol lists chart options, insert the exact `[[CHART:C#]]` marker
+  for every chart that materially improves a quantitative comparison, trend,
+  movement, distribution, bridge, or mix readout. The chart data is already fixed
+  and validated; do not create, modify, summarize as a substitute, or reinterpret
+  chart JSON yourself. Prefer charts and tables over dense text paragraphs for
+  numeric data. Do not create markdown, ascii, or prose-only substitute charts.
+  Do not suggest a follow-up chart unless an approved chart marker for that chart
+  is listed.
   Treat the user's requested output format as a hard requirement. If the
   user asks for a report, memo, table, named sections, a specific number of
   sections, plain markdown, or any explicit structure, follow that requested

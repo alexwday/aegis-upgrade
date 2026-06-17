@@ -1,14 +1,20 @@
-"""Tests for backend-approved Aegis chart specs."""
+"""Tests for planner-authored Aegis chart specs."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 
+import pytest
+
+from aegis_agent.model.agents import charts
 from aegis_agent.model.agents.charts import (
     build_chart_options,
     chart_instruction_text,
     chart_instruction_text_from_artifacts,
+    plan_chart_options,
     publish_chart_artifacts,
+    validate_planner_chart_plan,
 )
 from aegis_agent.model.agents.schemas import (
     EvidenceReference,
@@ -26,10 +32,11 @@ def _finding(
     year: int = 2026,
     metric_name: str = "CET1 ratio",
     unit: str = "%",
+    summary: str | None = None,
 ) -> Finding:
     return Finding(
         combo_label=f"Investor slides: {bank} {quarter} {year}",
-        summary=f"{bank} {metric_name} was {value}{unit}.",
+        summary=summary or f"{bank} {metric_name} was {value}{unit}.",
         finding_type="quantitative",
         metric=MetricObservation(
             metric_name=metric_name,
@@ -65,24 +72,45 @@ def _table_finding(table: ResearchTable, evidence_id: str = "E1") -> Finding:
     )
 
 
-def test_chart_options_publish_json_specs_without_image_assets() -> None:
-    """Peer-period numeric findings should produce JSON chart artifacts only."""
-    options = build_chart_options(
-        [
-            _finding("RY-CA", "13.7", "E1"),
-            _finding("TD-CA", "13.1", "E2"),
+def _peer_rank_plan(metric_name: str = "CET1 ratio") -> dict:
+    return {
+        "charts": [
+            {
+                "chart_type": "peer_rank_bar",
+                "title": f"{metric_name} peer ranking",
+                "subtitle": "Q1 2026 | %",
+                "metric_name": metric_name,
+                "unit": "%",
+                "x_label": "%",
+                "y_label": "Bank",
+                "rationale": f"{metric_name} is the metric the user asked to compare.",
+                "points": [
+                    {"label": "RY-CA", "value": 13.7, "evidence_ids": ["E1"]},
+                    {"label": "TD-CA", "value": 13.1, "evidence_ids": ["E2"]},
+                ],
+            }
         ]
+    }
+
+
+def test_valid_planner_output_publishes_json_specs_without_image_assets() -> None:
+    """Validated planner charts should publish existing JSON chart artifacts only."""
+    options = validate_planner_chart_plan(
+        _peer_rank_plan(),
+        [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],
+        "Compare CET1 ratio for RBC and TD.",
     )
 
     assert len(options) == 1
     option = options[0]
     assert option.chart_id == "C1"
     assert option.chart_type == "peer_rank_bar"
-    assert option.spec.chart_type == "peer_rank_bar"
-    assert [fact.bank_label for fact in option.spec.facts] == ["RY-CA", "TD-CA"]
+    assert option.spec.source_kind == "chart_planner"
+    assert option.spec.points[0]["value"] == 13.7
     assert option.evidence_ids == ["E1", "E2"]
     assert "asset_url" not in option.model_dump(mode="json")
     assert "[[CHART:C1]]" in chart_instruction_text(options)
+    assert "chart data is already fixed" in chart_instruction_text(options)
 
     queue: asyncio.Queue = asyncio.Queue()
     context = {"background_event_queue": queue}
@@ -91,103 +119,189 @@ def test_chart_options_publish_json_specs_without_image_assets() -> None:
     event = queue.get_nowait()
     assert event["type"] == "chart_artifact"
     assert event["content"]["chart_id"] == "C1"
-    assert event["content"]["spec"]["facts"][0]["value"] == 13.7
+    assert event["content"]["spec"]["points"][0]["value"] == 13.7
+    assert event["content"]["spec"]["facts"] == []
+    assert event["content"]["rationale"]
     assert "asset_url" not in event["content"]
     assert context["chart_artifacts"]["C1"]["spec"]["metric_name"] == "CET1 ratio"
 
 
-def test_single_bank_trend_produces_line_and_bar_options() -> None:
-    """Trend data should support both line and bar templates for follow-up requests."""
-    options = build_chart_options(
-        [
-            _finding("RY-CA", "13.4", "E1", quarter="Q1"),
-            _finding("RY-CA", "13.6", "E2", quarter="Q2"),
-            _finding("RY-CA", "13.7", "E3", quarter="Q3"),
-        ]
-    )
+def test_invalid_evidence_ids_are_rejected() -> None:
+    """The planner cannot cite evidence IDs that do not exist in this turn."""
+    plan = _peer_rank_plan()
+    plan["charts"][0]["points"][1]["evidence_ids"] = ["E999"]
 
-    assert [option.chart_type for option in options] == ["trend_line", "trend_bar"]
-    assert [option.chart_id for option in options] == ["C1", "C2"]
-    assert options[1].spec.x_label == "Period"
-    assert "[[CHART:C2]]" in chart_instruction_text(options)
-
-
-def test_two_period_peer_data_produces_slopegraph_and_delta() -> None:
-    """Two-period peer comparisons should emphasize rank movement and change."""
-    options = build_chart_options(
-        [
-            _finding("RY-CA", "13.4", "E1", quarter="Q1"),
-            _finding("RY-CA", "13.7", "E2", quarter="Q2"),
-            _finding("TD-CA", "12.8", "E3", quarter="Q1"),
-            _finding("TD-CA", "13.1", "E4", quarter="Q2"),
-        ]
-    )
-
-    assert [option.chart_type for option in options[:2]] == ["slopegraph", "delta_bar"]
-
-
-def test_multi_period_peer_data_produces_multi_series_line() -> None:
-    """Multi-bank, multi-period metric facts should produce a multi-series trend."""
-    options = build_chart_options(
-        [
-            _finding("RY-CA", "13.4", "E1", quarter="Q1"),
-            _finding("RY-CA", "13.6", "E2", quarter="Q2"),
-            _finding("RY-CA", "13.7", "E3", quarter="Q3"),
-            _finding("TD-CA", "12.8", "E4", quarter="Q1"),
-            _finding("TD-CA", "13.0", "E5", quarter="Q2"),
-            _finding("TD-CA", "13.1", "E6", quarter="Q3"),
-        ]
-    )
-
-    assert options[0].chart_type == "multi_series_line"
-    assert options[0].spec.series[0]["name"] in {"RY-CA", "TD-CA"}
-
-
-def test_peer_metric_pairs_can_produce_scatter_plot() -> None:
-    """Two same-period peer metrics should produce a scatter plot when enough peers exist."""
-    findings = []
-    for index, bank in enumerate(["RY-CA", "TD-CA", "BMO-CA", "BNS-CA"], start=1):
-        findings.append(
-            _finding(bank, str(12 + index), f"E{index}", metric_name="CET1 ratio", unit="%")
+    assert (
+        validate_planner_chart_plan(
+            plan,
+            [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],
+            "Compare CET1 ratio for RBC and TD.",
         )
-        findings.append(
-            _finding(bank, str(8 + index), f"E{index + 10}", metric_name="ROE", unit="%")
-        )
-
-    options = build_chart_options(findings)
-
-    assert "scatter_plot" in {option.chart_type for option in options}
-
-
-def test_period_table_produces_table_derived_trend() -> None:
-    """A period-shaped table should produce a table-derived trend chart."""
-    options = build_chart_options(
-        [
-            _table_finding(
-                ResearchTable(
-                    title="Net interest margin",
-                    columns=["Metric", "Q1 2026", "Q2 2026", "Q3 2026"],
-                    rows=[
-                        {
-                            "Metric": "Net interest margin",
-                            "Q1 2026": "1.62%",
-                            "Q2 2026": "1.66%",
-                            "Q3 2026": "1.70%",
-                        }
-                    ],
-                )
-            )
-        ]
+        == []
     )
 
-    assert options[0].chart_type == "trend_line"
-    assert options[0].spec.source_kind == "table"
-    assert options[0].spec.series[0]["name"] == "Net interest margin"
+
+def test_invented_numeric_values_are_rejected() -> None:
+    """The planner cannot publish values that are not traceable to cited evidence."""
+    plan = _peer_rank_plan()
+    plan["charts"][0]["points"][1]["value"] = 99.9
+
+    assert (
+        validate_planner_chart_plan(
+            plan,
+            [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],
+            "Compare CET1 ratio for RBC and TD.",
+        )
+        == []
+    )
 
 
-def test_segment_table_produces_composition_chart() -> None:
-    """Segment/category tables should produce composition charts."""
-    options = build_chart_options(
+def test_underpopulated_charts_are_dropped() -> None:
+    """A chart should disappear when too few valid points remain after validation."""
+    plan = _peer_rank_plan()
+    plan["charts"][0]["points"] = [{"label": "RY-CA", "value": 13.7, "evidence_ids": ["E1"]}]
+
+    assert (
+        validate_planner_chart_plan(
+            plan,
+            [_finding("RY-CA", "13.7", "E1")],
+            "Compare CET1 ratio for RBC.",
+        )
+        == []
+    )
+
+
+def test_relevance_validation_drops_unrelated_capital_chart_for_credit_question() -> None:
+    """Planner charts must match the user's financial intent, not any available metric."""
+    options = validate_planner_chart_plan(
+        _peer_rank_plan(),
+        [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],
+        "Compare credit quality for RBC and TD.",
+    )
+
+    assert options == []
+
+
+def test_generic_bank_comparison_does_not_reject_metric_chart() -> None:
+    """Bank names alone should not make the relevance gate reject all charts."""
+    options = validate_planner_chart_plan(
+        _peer_rank_plan(),
+        [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],
+        "Compare RBC and TD.",
+    )
+
+    assert len(options) == 1
+
+
+def test_cet1_question_drops_unrelated_metric_but_keeps_cet1_chart() -> None:
+    """A relevant CET1 chart should survive while an unrelated metric chart is dropped."""
+    plan = _peer_rank_plan()
+    plan["charts"].append(
+        {
+            "chart_type": "peer_rank_bar",
+            "title": "ROE peer ranking",
+            "subtitle": "Q1 2026 | %",
+            "metric_name": "ROE",
+            "unit": "%",
+            "x_label": "%",
+            "y_label": "Bank",
+            "rationale": "ROE is available but not requested.",
+            "points": [
+                {"label": "RY-CA", "value": 17.0, "evidence_ids": ["E3"]},
+                {"label": "TD-CA", "value": 15.0, "evidence_ids": ["E4"]},
+            ],
+        }
+    )
+
+    options = validate_planner_chart_plan(
+        plan,
+        [
+            _finding("RY-CA", "13.7", "E1"),
+            _finding("TD-CA", "13.1", "E2"),
+            _finding("RY-CA", "17.0", "E3", metric_name="ROE"),
+            _finding("TD-CA", "15.0", "E4", metric_name="ROE"),
+        ],
+        "Compare CET1 ratio for RBC and TD.",
+    )
+
+    assert [option.metric_name for option in options] == ["CET1 ratio"]
+
+
+def test_generic_ratio_word_does_not_allow_unrelated_ratio_chart() -> None:
+    """Generic words like ratio should not make an unrelated metric relevant."""
+    plan = _peer_rank_plan("Efficiency ratio")
+    plan["charts"][0]["points"] = [
+        {"label": "RY-CA", "value": 54.0, "evidence_ids": ["E1"]},
+        {"label": "TD-CA", "value": 52.0, "evidence_ids": ["E2"]},
+    ]
+
+    assert (
+        validate_planner_chart_plan(
+            plan,
+            [
+                _finding("RY-CA", "54.0", "E1", metric_name="Efficiency ratio"),
+                _finding("TD-CA", "52.0", "E2", metric_name="Efficiency ratio"),
+            ],
+            "Compare CET1 ratio for RBC and TD.",
+        )
+        == []
+    )
+
+
+def test_finance_acronym_aliases_allow_relevant_chart() -> None:
+    """Common finance acronyms should match their expanded metric labels."""
+    plan = _peer_rank_plan("Net interest margin")
+    plan["charts"][0]["points"] = [
+        {"label": "RY-CA", "value": 1.62, "evidence_ids": ["E1"]},
+        {"label": "TD-CA", "value": 1.58, "evidence_ids": ["E2"]},
+    ]
+
+    options = validate_planner_chart_plan(
+        plan,
+        [
+            _finding("RY-CA", "1.62", "E1", metric_name="Net interest margin"),
+            _finding("TD-CA", "1.58", "E2", metric_name="Net interest margin"),
+        ],
+        "Compare NIM for RBC and TD.",
+    )
+
+    assert len(options) == 1
+
+
+def test_table_values_can_validate_planner_composition_chart() -> None:
+    """Planner charts may use source-grounded table cells when evidence is cited."""
+    plan = {
+        "charts": [
+            {
+                "chart_type": "composition_100_bar",
+                "title": "Revenue mix",
+                "subtitle": "Q1 2026 | %",
+                "metric_name": "Revenue mix",
+                "unit": "%",
+                "x_label": "Segment",
+                "y_label": "Share",
+                "rationale": "Revenue mix directly shows the segment composition requested.",
+                "points": [
+                    {
+                        "group": "Q1 2026",
+                        "category": "Personal Banking",
+                        "value": 45,
+                        "evidence_ids": ["E1"],
+                    },
+                    {
+                        "group": "Q1 2026",
+                        "category": "Commercial Banking",
+                        "value": 35,
+                        "evidence_ids": ["E1"],
+                    },
+                    {"group": "Q1 2026", "category": "Wealth", "value": 20, "evidence_ids": ["E1"]},
+                ],
+            }
+        ]
+    }
+
+    options = validate_planner_chart_plan(
+        plan,
         [
             _table_finding(
                 ResearchTable(
@@ -200,81 +314,83 @@ def test_segment_table_produces_composition_chart() -> None:
                     ],
                 )
             )
-        ]
+        ],
+        "Show the revenue mix by segment.",
     )
 
     assert options[0].chart_type == "composition_100_bar"
     assert len(options[0].spec.points) == 3
 
 
-def test_bridge_table_produces_waterfall() -> None:
-    """Bridge or movement tables should produce waterfall charts."""
-    options = build_chart_options(
-        [
-            _table_finding(
-                ResearchTable(
-                    title="CET1 capital bridge",
-                    columns=["Driver", "Impact"],
-                    rows=[
-                        {"Driver": "Opening CET1", "Impact": "13.4%"},
-                        {"Driver": "Internal capital generation", "Impact": "0.3%"},
-                        {"Driver": "RWA growth", "Impact": "-0.2%"},
-                        {"Driver": "Ending CET1", "Impact": "13.5%"},
-                    ],
-                )
-            )
-        ]
-    )
-
-    assert options[0].chart_type == "waterfall"
-    assert options[0].spec.points[0]["is_total"] is True
+def test_heuristic_chart_generation_is_disabled() -> None:
+    """The old deterministic generator should not create charts directly."""
+    assert build_chart_options([_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")]) == []
 
 
-def test_mixed_unit_period_table_produces_small_multiples() -> None:
-    """Mixed-unit metric tables should use small multiples rather than dual axes."""
-    options = build_chart_options(
-        [
-            _table_finding(
-                ResearchTable(
-                    title="Credit and profitability metrics",
-                    columns=["Metric", "Q1 2026", "Q2 2026", "Q3 2026"],
-                    rows=[
-                        {"Metric": "NIM", "Q1 2026": "1.62%", "Q2 2026": "1.66%", "Q3 2026": "1.70%"},
-                        {"Metric": "PCL ratio", "Q1 2026": "42 bps", "Q2 2026": "45 bps", "Q3 2026": "44 bps"},
-                    ],
-                )
-            )
-        ]
-    )
+@pytest.mark.asyncio
+async def test_planner_failure_returns_no_charts_without_fallback(monkeypatch) -> None:
+    """Planner errors should not trigger deterministic fallback charts."""
 
-    assert options[0].chart_type == "small_multiple_panel"
-    assert len({series["unit"] for series in options[0].spec.series}) == 2
+    def fake_prompt(*args, **kwargs):
+        _ = args, kwargs
+        raise LookupError("missing prompt")
 
+    monkeypatch.setattr(charts, "load_prompt_from_db", fake_prompt)
 
-def test_no_chart_for_one_point_or_missing_evidence() -> None:
-    """Charts should not be approved when data or evidence is insufficient."""
-    assert build_chart_options([_finding("RY-CA", "13.7", "E1")]) == []
-
-    finding = _finding("RY-CA", "13.7", "E1")
-    finding.evidence_refs = []
-    assert build_chart_options([finding, _finding("TD-CA", "13.1", "E2")]) == []
-
-
-def test_no_chart_for_ambiguous_table_headers() -> None:
-    """Ambiguous tables should be ignored instead of guessed into charts."""
-    options = build_chart_options(
-        [
-            _table_finding(
-                ResearchTable(
-                    title="Ambiguous values",
-                    columns=["Label", "Value"],
-                    rows=[{"Label": "Alpha", "Value": "10"}, {"Label": "Beta", "Value": "12"}],
-                )
-            )
-        ]
+    options = await plan_chart_options(
+        [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],
+        "Compare CET1 ratio for RBC and TD.",
+        {"execution_id": "test", "auth_config": {"token": "token"}},
     )
 
     assert options == []
+
+
+@pytest.mark.asyncio
+async def test_chart_planner_uses_required_tool_call(monkeypatch) -> None:
+    """The planner should call submit_chart_plan and validate the returned specs."""
+
+    def fake_prompt(*args, **kwargs):
+        _ = args, kwargs
+        return {
+            "system_prompt": "Plan charts.",
+            "user_prompt": "{{question}}\n{{chart_templates}}\n{{research_payload}}",
+            "tool_definition": charts.DEFAULT_CHART_PLANNER_TOOL,
+        }
+
+    async def fake_complete_with_tools(messages, tools, context, llm_params):
+        assert "Compare CET1" in messages[1]["content"]
+        assert tools[0]["function"]["name"] == "submit_chart_plan"
+        assert llm_params["tool_choice"]["function"]["name"] == "submit_chart_plan"
+        _ = context
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "submit_chart_plan",
+                                    "arguments": json.dumps(_peer_rank_plan()),
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(charts, "load_prompt_from_db", fake_prompt)
+    monkeypatch.setattr(charts, "complete_with_tools", fake_complete_with_tools)
+
+    options = await plan_chart_options(
+        [_finding("RY-CA", "13.7", "E1"), _finding("TD-CA", "13.1", "E2")],
+        "Compare CET1 ratio for RBC and TD.",
+        {"execution_id": "test", "auth_config": {"token": "token"}},
+    )
+
+    assert len(options) == 1
+    assert options[0].chart_type == "peer_rank_bar"
 
 
 def test_prior_chart_instruction_reuses_approved_artifacts_only() -> None:

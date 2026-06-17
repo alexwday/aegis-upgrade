@@ -10,10 +10,18 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, Field
 
+from ...connections.llm_connector import complete_with_tools
+from ...utils.logging import get_logger
+from ...utils.prompt_loader import load_prompt_from_db
 from .schemas import Finding, ResearchTable
 
 
 MAX_CHART_OPTIONS = 6
+MAX_PLANNED_CHARTS = 4
+MAX_PLANNER_SERIES = 6
+MAX_PLANNER_POINTS = 40
+CHART_PLANNER_LAYER = "aegis_agent"
+CHART_PLANNER_NAME = "chart_planner"
 
 QUARTER_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
 SOURCE_PREFIX_RE = re.compile(r"^[A-Za-z][A-Za-z 0-9&-]*:\s+")
@@ -26,6 +34,155 @@ BRIDGE_LABEL_RE = re.compile(
     r"\b(?:bridge|walk|movement|reconciliation|rollforward|roll-forward)\b",
     re.I,
 )
+SUPPORTED_PLANNER_CHART_TYPES = {
+    "peer_rank_bar",
+    "trend_line",
+    "trend_bar",
+    "multi_series_line",
+    "slopegraph",
+    "delta_bar",
+    "composition_stacked_bar",
+    "composition_100_bar",
+    "waterfall",
+    "scatter_plot",
+    "small_multiple_panel",
+    "heatmap",
+}
+QUESTION_STOPWORDS = {
+    "a",
+    "about",
+    "across",
+    "all",
+    "also",
+    "and",
+    "any",
+    "are",
+    "bmo",
+    "bns",
+    "bank",
+    "banks",
+    "between",
+    "by",
+    "can",
+    "cibc",
+    "cm",
+    "chart",
+    "compare",
+    "comparison",
+    "create",
+    "data",
+    "for",
+    "from",
+    "graph",
+    "how",
+    "in",
+    "is",
+    "me",
+    "metric",
+    "metrics",
+    "na",
+    "nbc",
+    "of",
+    "on",
+    "performance",
+    "period",
+    "q1",
+    "q2",
+    "q3",
+    "q4",
+    "ratio",
+    "rbc",
+    "result",
+    "results",
+    "royal",
+    "ry",
+    "scotia",
+    "scotiabank",
+    "show",
+    "summarize",
+    "td",
+    "tell",
+    "the",
+    "to",
+    "trend",
+    "us",
+    "value",
+    "values",
+    "versus",
+    "vs",
+    "what",
+    "with",
+    "year",
+}
+QUESTION_ALIASES = {
+    "capital": {"capital", "cet1", "rwa", "leverage", "tier", "basel"},
+    "cet1": {"capital", "cet1", "tier"},
+    "rwa": {"capital", "rwa", "risk", "weighted", "assets"},
+    "credit": {"credit", "pcl", "provision", "provisions", "allowance", "impaired", "delinquency"},
+    "quality": {"quality", "credit", "pcl", "impaired", "delinquency"},
+    "pcl": {"pcl", "provision", "provisions", "credit", "loss", "losses", "quality"},
+    "revenue": {"revenue", "sales", "income"},
+    "earnings": {"earnings", "income", "profit", "profitability", "roe", "eps"},
+    "roe": {"roe", "return", "equity", "profitability"},
+    "roa": {"roa", "return", "assets", "profitability"},
+    "eps": {"eps", "earnings", "share"},
+    "profitability": {"profitability", "roe", "roa", "margin", "income"},
+    "expense": {"expense", "expenses", "cost", "efficiency"},
+    "expenses": {"expense", "expenses", "cost", "efficiency"},
+    "efficiency": {"efficiency", "expense", "expenses", "cost"},
+    "margin": {"margin", "nim", "spread"},
+    "nim": {"nim", "net", "interest", "margin", "spread"},
+    "deposit": {"deposit", "deposits", "funding"},
+    "deposits": {"deposit", "deposits", "funding"},
+    "loan": {"loan", "loans", "lending", "growth"},
+    "loans": {"loan", "loans", "lending", "growth"},
+}
+
+DEFAULT_CHART_PLANNER_TOOL: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "submit_chart_plan",
+        "description": "Return planner-authored source-grounded chart specs for the final Aegis answer.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "charts": {
+                    "type": "array",
+                    "maxItems": MAX_PLANNED_CHARTS,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "chart_type": {"type": "string"},
+                            "title": {"type": "string"},
+                            "subtitle": {"type": "string"},
+                            "metric_name": {"type": "string"},
+                            "unit": {"type": "string"},
+                            "x_label": {"type": "string"},
+                            "y_label": {"type": "string"},
+                            "value_format": {"type": "object"},
+                            "points": {"type": "array", "items": {"type": "object"}},
+                            "series": {"type": "array", "items": {"type": "object"}},
+                            "annotations": {"type": "array", "items": {"type": "object"}},
+                            "rationale": {"type": "string"},
+                        },
+                        "required": [
+                            "chart_type",
+                            "title",
+                            "subtitle",
+                            "metric_name",
+                            "x_label",
+                            "y_label",
+                            "rationale",
+                        ],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["charts"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 class MetricFact(BaseModel):
@@ -71,6 +228,7 @@ class ChartOption(BaseModel):
     unit: str = ""
     spec: ChartSpec
     evidence_ids: List[str] = Field(default_factory=list)
+    rationale: str = ""
     status: str = "ready"
 
 
@@ -84,6 +242,7 @@ class ChartArtifact(BaseModel):
     alt_text: str
     spec: ChartSpec
     evidence_ids: List[str] = Field(default_factory=list)
+    rationale: str = ""
     status: str = "ready"
 
 
@@ -95,11 +254,535 @@ class ChartCandidate:
     option: ChartOption
 
 
+async def plan_chart_options(
+    findings: Sequence[Finding],
+    question: str,
+    context: Dict[str, Any],
+) -> List[ChartOption]:
+    """Ask the chart planner LLM to author chart specs, then validate them."""
+    logger = get_logger()
+    if not findings:
+        return []
+    if not context.get("auth_config"):
+        logger.info(
+            "chart_planner.skipped_no_auth",
+            execution_id=context.get("execution_id"),
+        )
+        return []
+
+    try:
+        prompt_data = load_prompt_from_db(
+            CHART_PLANNER_LAYER,
+            CHART_PLANNER_NAME,
+            compose_with_globals=False,
+            execution_id=context.get("execution_id"),
+        )
+        system_prompt = str(prompt_data.get("system_prompt") or "").strip()
+        user_prompt = str(prompt_data.get("user_prompt") or "").strip()
+        if not system_prompt or not user_prompt:
+            raise ValueError("chart planner prompt requires system_prompt and user_prompt")
+        tools = _planner_tools(prompt_data.get("tool_definition"))
+        response = await complete_with_tools(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": _render_planner_user_prompt(user_prompt, question, findings),
+                },
+            ],
+            tools=tools,
+            context=context,
+            llm_params={
+                "temperature": 0,
+                "max_tokens": 2800,
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": "submit_chart_plan"},
+                },
+            },
+        )
+        plan = _extract_planner_tool_arguments(response)
+        options = validate_planner_chart_plan(plan, findings, question)
+        logger.info(
+            "chart_planner.completed",
+            execution_id=context.get("execution_id"),
+            requested=len(plan.get("charts") or []),
+            approved=len(options),
+        )
+        return options
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning(
+            "chart_planner.failed",
+            execution_id=context.get("execution_id"),
+            error=str(exc),
+        )
+        return []
+
+
+def validate_planner_chart_plan(
+    plan: Mapping[str, Any],
+    findings: Sequence[Finding],
+    question: str,
+) -> List[ChartOption]:
+    """Validate planner-authored charts against current-turn evidence and numbers."""
+    charts = plan.get("charts") if isinstance(plan, Mapping) else None
+    if not isinstance(charts, list):
+        return []
+
+    valid_evidence_ids = _valid_evidence_ids(findings)
+    trace_numbers = _trace_numbers_by_evidence(findings)
+    options: List[ChartOption] = []
+
+    for raw_chart in charts:
+        if len(options) >= MAX_PLANNED_CHARTS:
+            break
+        if not isinstance(raw_chart, Mapping):
+            continue
+        option = _validated_planner_chart(
+            raw_chart,
+            question=question,
+            valid_evidence_ids=valid_evidence_ids,
+            trace_numbers=trace_numbers,
+        )
+        if option is not None:
+            options.append(option)
+
+    for index, option in enumerate(options, start=1):
+        option.chart_id = f"C{index}"
+    return options
+
+
+def _planner_tools(raw_tool_definition: Any) -> List[Dict[str, Any]]:
+    if isinstance(raw_tool_definition, Mapping):
+        return [dict(raw_tool_definition)]
+    if isinstance(raw_tool_definition, list) and raw_tool_definition:
+        return [dict(tool) for tool in raw_tool_definition if isinstance(tool, Mapping)]
+    return [DEFAULT_CHART_PLANNER_TOOL]
+
+
+def _render_planner_user_prompt(
+    template: str,
+    question: str,
+    findings: Sequence[Finding],
+) -> str:
+    payload = {
+        "question": question,
+        "available_chart_templates": sorted(SUPPORTED_PLANNER_CHART_TYPES),
+        "research_findings": _planner_research_payload(findings),
+    }
+    rendered = template
+    replacements = {
+        "{{question}}": question,
+        "{{chart_templates}}": json.dumps(payload["available_chart_templates"], ensure_ascii=False),
+        "{{research_payload}}": json.dumps(payload["research_findings"], ensure_ascii=False),
+        "{{planner_payload}}": json.dumps(payload, ensure_ascii=False),
+    }
+    for token, value in replacements.items():
+        rendered = rendered.replace(token, value)
+    return rendered
+
+
+def _planner_research_payload(findings: Sequence[Finding]) -> List[Dict[str, Any]]:
+    payload = []
+    for index, finding in enumerate(findings, start=1):
+        evidence_ids = _finding_evidence_ids(finding)
+        if not evidence_ids:
+            continue
+        item: Dict[str, Any] = {
+            "finding_id": f"F{index}",
+            "combo_label": finding.combo_label,
+            "finding_type": finding.finding_type,
+            "summary": finding.summary,
+            "details": finding.details,
+            "evidence_ids": evidence_ids,
+        }
+        if finding.metric is not None:
+            item["metric"] = finding.metric.model_dump(mode="json")
+        if finding.table is not None:
+            item["table"] = finding.table.model_dump(mode="json")
+        payload.append(item)
+    return payload
+
+
+def _extract_planner_tool_arguments(response: Mapping[str, Any]) -> Dict[str, Any]:
+    choices = response.get("choices") or []
+    if not choices:
+        raise ValueError("chart planner returned no choices")
+    message = choices[0].get("message") or {}
+    for tool_call in message.get("tool_calls") or []:
+        function = tool_call.get("function") or {}
+        if function.get("name") != "submit_chart_plan":
+            continue
+        return _parse_json_object(function.get("arguments") or "{}")
+    if message.get("content"):
+        return _parse_json_object(message["content"])
+    raise ValueError("chart planner did not call submit_chart_plan")
+
+
+def _parse_json_object(value: Any) -> Dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if not isinstance(value, str):
+        raise ValueError("chart planner arguments must be JSON object text")
+    stripped = value.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.I)
+        stripped = re.sub(r"\s*```$", "", stripped)
+    if not stripped.startswith("{"):
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start >= 0 and end > start:
+            stripped = stripped[start : end + 1]
+    parsed = json.loads(stripped)
+    if not isinstance(parsed, dict):
+        raise ValueError("chart planner arguments must decode to an object")
+    return parsed
+
+
+def _validated_planner_chart(
+    raw_chart: Mapping[str, Any],
+    *,
+    question: str,
+    valid_evidence_ids: set[str],
+    trace_numbers: Mapping[str, Sequence[float]],
+) -> Optional[ChartOption]:
+    chart_type = _clean_text_field(raw_chart.get("chart_type"), 60)
+    if chart_type not in SUPPORTED_PLANNER_CHART_TYPES:
+        return None
+
+    title = _clean_text_field(raw_chart.get("title"), 120)
+    subtitle = _clean_text_field(raw_chart.get("subtitle"), 160)
+    metric_name = _clean_text_field(raw_chart.get("metric_name"), 100)
+    x_label = _clean_text_field(raw_chart.get("x_label"), 60)
+    y_label = _clean_text_field(raw_chart.get("y_label"), 60)
+    rationale = _clean_text_field(raw_chart.get("rationale"), 260)
+    if not all([title, subtitle, metric_name, x_label, y_label, rationale]):
+        return None
+    if not _chart_matches_question(raw_chart, question):
+        return None
+
+    points = _validated_points(
+        raw_chart.get("points"),
+        valid_evidence_ids=valid_evidence_ids,
+        trace_numbers=trace_numbers,
+    )
+    series = _validated_series(
+        raw_chart.get("series"),
+        valid_evidence_ids=valid_evidence_ids,
+        trace_numbers=trace_numbers,
+    )
+    points = points[:MAX_PLANNER_POINTS]
+    series = series[:MAX_PLANNER_SERIES]
+    if not _chart_has_minimum_data(chart_type, points, series):
+        return None
+
+    evidence_ids = _chart_evidence_ids(points, series)
+    if not evidence_ids:
+        return None
+
+    unit = _clean_text_field(raw_chart.get("unit"), 30)
+    spec = ChartSpec(
+        chart_type=chart_type,
+        metric_name=metric_name,
+        unit=unit,
+        x_label=x_label,
+        y_label=y_label,
+        points=points,
+        series=series,
+        annotations=_validated_annotations(raw_chart.get("annotations")),
+        value_format=dict(raw_chart.get("value_format") or {})
+        if isinstance(raw_chart.get("value_format"), Mapping)
+        else {},
+        source_kind="chart_planner",
+    )
+    return ChartOption(
+        chart_id="C0",
+        chart_type=chart_type,
+        title=title,
+        subtitle=subtitle,
+        metric_name=metric_name,
+        unit=unit,
+        spec=spec,
+        evidence_ids=evidence_ids,
+        rationale=rationale,
+    )
+
+
+def _validated_points(
+    raw_points: Any,
+    *,
+    valid_evidence_ids: set[str],
+    trace_numbers: Mapping[str, Sequence[float]],
+) -> List[Dict[str, Any]]:
+    if not isinstance(raw_points, list):
+        return []
+    points = []
+    for raw_point in raw_points:
+        if not isinstance(raw_point, Mapping):
+            continue
+        point = _validated_point(
+            raw_point,
+            valid_evidence_ids=valid_evidence_ids,
+            trace_numbers=trace_numbers,
+        )
+        if point is not None:
+            points.append(point)
+    return points
+
+
+def _validated_series(
+    raw_series: Any,
+    *,
+    valid_evidence_ids: set[str],
+    trace_numbers: Mapping[str, Sequence[float]],
+) -> List[Dict[str, Any]]:
+    if not isinstance(raw_series, list):
+        return []
+    series = []
+    for raw_item in raw_series:
+        if not isinstance(raw_item, Mapping):
+            continue
+        name = _clean_text_field(raw_item.get("name"), 80)
+        if not name:
+            continue
+        points = _validated_points(
+            raw_item.get("points"),
+            valid_evidence_ids=valid_evidence_ids,
+            trace_numbers=trace_numbers,
+        )
+        if len(points) < 2:
+            continue
+        series.append(
+            {
+                "name": name,
+                "unit": _clean_text_field(raw_item.get("unit"), 30),
+                "points": points[:MAX_PLANNER_POINTS],
+            }
+        )
+    return series
+
+
+def _validated_point(
+    raw_point: Mapping[str, Any],
+    *,
+    valid_evidence_ids: set[str],
+    trace_numbers: Mapping[str, Sequence[float]],
+) -> Optional[Dict[str, Any]]:
+    evidence_ids = [
+        str(evidence_id)
+        for evidence_id in raw_point.get("evidence_ids") or []
+        if str(evidence_id) in valid_evidence_ids
+    ]
+    if not evidence_ids:
+        return None
+
+    point: Dict[str, Any] = {"evidence_ids": sorted(set(evidence_ids))}
+    for key in ("label", "group", "category", "period_label", "bank_label"):
+        value = _clean_text_field(raw_point.get(key), 90)
+        if value:
+            point[key] = value
+    if "is_total" in raw_point:
+        point["is_total"] = bool(raw_point.get("is_total"))
+
+    numeric_keys = ("value", "x", "y", "start", "end")
+    numeric_values = {}
+    for key in numeric_keys:
+        if key not in raw_point:
+            continue
+        parsed = _coerce_float(raw_point.get(key))
+        if parsed is None:
+            continue
+        numeric_values[key] = parsed
+        point[key] = parsed
+
+    if not numeric_values:
+        return None
+    if not _point_numbers_are_traceable(numeric_values, point["evidence_ids"], trace_numbers):
+        return None
+    if not any(key in point for key in ("label", "group", "category", "period_label", "bank_label")):
+        point["label"] = "Observation"
+    return point
+
+
+def _point_numbers_are_traceable(
+    numeric_values: Mapping[str, float],
+    evidence_ids: Sequence[str],
+    trace_numbers: Mapping[str, Sequence[float]],
+) -> bool:
+    for key, value in numeric_values.items():
+        if key == "value" and _computed_delta_is_valid(numeric_values, evidence_ids, trace_numbers):
+            continue
+        if not _value_is_traceable(value, evidence_ids, trace_numbers):
+            return False
+    return True
+
+
+def _computed_delta_is_valid(
+    numeric_values: Mapping[str, float],
+    evidence_ids: Sequence[str],
+    trace_numbers: Mapping[str, Sequence[float]],
+) -> bool:
+    if not {"value", "start", "end"}.issubset(numeric_values):
+        return False
+    expected = numeric_values["end"] - numeric_values["start"]
+    if abs(expected - numeric_values["value"]) > max(0.01, abs(expected) * 0.001):
+        return False
+    return _value_is_traceable(numeric_values["start"], evidence_ids, trace_numbers) and _value_is_traceable(
+        numeric_values["end"], evidence_ids, trace_numbers
+    )
+
+
+def _value_is_traceable(
+    value: float,
+    evidence_ids: Sequence[str],
+    trace_numbers: Mapping[str, Sequence[float]],
+) -> bool:
+    tolerance = max(0.01, abs(value) * 0.001)
+    for evidence_id in evidence_ids:
+        for traced in trace_numbers.get(evidence_id, []):
+            if abs(traced - value) <= tolerance:
+                return True
+    return False
+
+
+def _chart_has_minimum_data(
+    chart_type: str,
+    points: Sequence[Mapping[str, Any]],
+    series: Sequence[Mapping[str, Any]],
+) -> bool:
+    series_point_count = sum(len(item.get("points") or []) for item in series)
+    if chart_type in {"trend_line", "trend_bar", "peer_rank_bar"}:
+        return len(points) >= 2 or series_point_count >= 2
+    if chart_type in {"multi_series_line", "slopegraph", "small_multiple_panel"}:
+        return len(series) >= 2 and series_point_count >= 4
+    if chart_type == "delta_bar":
+        return len(points) >= 1
+    if chart_type in {"composition_stacked_bar", "composition_100_bar"}:
+        return len(points) >= 2
+    if chart_type == "waterfall":
+        return len(points) >= 3
+    if chart_type == "scatter_plot":
+        return len(points) >= 4 and all("x" in point and "y" in point for point in points)
+    if chart_type == "heatmap":
+        return len(points) >= 4
+    return False
+
+
+def _chart_evidence_ids(
+    points: Sequence[Mapping[str, Any]],
+    series: Sequence[Mapping[str, Any]],
+) -> List[str]:
+    evidence_ids: set[str] = set()
+    for point in points:
+        evidence_ids.update(str(eid) for eid in point.get("evidence_ids") or [])
+    for item in series:
+        for point in item.get("points") or []:
+            evidence_ids.update(str(eid) for eid in point.get("evidence_ids") or [])
+    return sorted(evidence_ids)
+
+
+def _validated_annotations(raw_annotations: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw_annotations, list):
+        return []
+    annotations = []
+    for item in raw_annotations[:6]:
+        if not isinstance(item, Mapping):
+            continue
+        text = _clean_text_field(item.get("text"), 160)
+        if text:
+            annotations.append({"text": text})
+    return annotations
+
+
+def _chart_matches_question(raw_chart: Mapping[str, Any], question: str) -> bool:
+    question_terms = _question_domain_terms(question)
+    if not question_terms:
+        return True
+    chart_blob = " ".join(
+        str(raw_chart.get(key) or "")
+        for key in ("title", "subtitle", "metric_name", "x_label", "y_label", "rationale")
+    ).lower()
+    chart_terms = set(re.findall(r"[a-z][a-z0-9]+", chart_blob))
+    return bool(question_terms.intersection(chart_terms))
+
+
+def _question_domain_terms(question: str) -> set[str]:
+    tokens = {
+        token
+        for token in re.findall(r"[a-z][a-z0-9]+", str(question or "").lower())
+        if token not in QUESTION_STOPWORDS and not re.fullmatch(r"20\d{2}", token)
+    }
+    expanded = set(tokens)
+    for token in tokens:
+        expanded.update(QUESTION_ALIASES.get(token, set()))
+    return expanded
+
+
+def _valid_evidence_ids(findings: Sequence[Finding]) -> set[str]:
+    return {evidence_id for finding in findings for evidence_id in _finding_evidence_ids(finding)}
+
+
+def _trace_numbers_by_evidence(findings: Sequence[Finding]) -> Dict[str, List[float]]:
+    trace: Dict[str, List[float]] = {}
+    for finding in findings:
+        evidence_ids = _finding_evidence_ids(finding)
+        if not evidence_ids:
+            continue
+        values = _traceable_numbers_for_finding(finding)
+        for evidence_id in evidence_ids:
+            trace.setdefault(evidence_id, []).extend(values)
+    return trace
+
+
+def _traceable_numbers_for_finding(finding: Finding) -> List[float]:
+    values: List[float] = []
+    texts = [finding.summary, finding.details or ""]
+    if finding.metric is not None:
+        texts.append(finding.metric.metric_value)
+    if finding.table is not None:
+        texts.append(finding.table.notes or "")
+        for row in finding.table.rows:
+            texts.extend(str(value or "") for value in row.values())
+    for text in texts:
+        values.extend(_parse_all_numeric(text))
+    return values
+
+
+def _parse_all_numeric(value: Any) -> List[float]:
+    text = str(value or "").replace("$", "")
+    values = []
+    for match in NUMERIC_RE.finditer(text):
+        if match.start() > 0 and text[match.start() - 1].lower() == "q":
+            continue
+        if re.fullmatch(r"20\d{2}", match.group(0)):
+            continue
+        parsed = _coerce_float(match.group(0))
+        if parsed is not None:
+            values.append(parsed)
+    return values
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    parsed = _parse_numeric(value)
+    return parsed
+
+
+def _clean_text_field(value: Any, limit: int) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
 def chart_instruction_text(options: Sequence[ChartOption]) -> str:
     """Return compact instructions for the final-answer model."""
     if not options:
         return (
-            "No backend-approved chart options are available for this turn. "
+            "No chart-planner-approved chart options are available for this turn. "
             "Do not include chart markers and do not create ad hoc markdown charts."
         )
     payload = [
@@ -112,12 +795,14 @@ def chart_instruction_text(options: Sequence[ChartOption]) -> str:
             "metric_name": option.metric_name,
             "unit": option.unit,
             "source_kind": option.spec.source_kind,
+            "rationale": option.rationale,
             "evidence_ids": option.evidence_ids,
         }
         for option in options
     ]
     return (
-        "Backend-approved interactive chart options for this turn are listed below. "
+        "Chart-planner-approved interactive chart options for this turn are listed below. "
+        "The chart data is already fixed and validated; do not create or modify chart data. "
         "For quantitative research answers, insert relevant chart markers by default. "
         "Use every directly relevant chart when there are one to three options; when "
         "there are four or more options, choose the strongest two to four based on the user's "
@@ -156,7 +841,7 @@ def chart_instruction_text_from_artifacts(artifacts: Mapping[str, Any]) -> str:
 
     if not payload:
         return (
-            "No backend-approved chart options are available for this turn. "
+            "No chart-planner-approved chart options are available for this turn. "
             "Do not include chart markers and do not create ad hoc markdown charts."
         )
 
@@ -172,142 +857,9 @@ def chart_instruction_text_from_artifacts(artifacts: Mapping[str, Any]) -> str:
 
 
 def build_chart_options(findings: Sequence[Finding], question: str = "") -> List[ChartOption]:
-    """Build deterministic chart candidates from structured research findings."""
-    facts = _dedupe_facts(_facts_from_findings(findings))
-    groups = _group_facts(facts)
-    candidates: List[ChartCandidate] = []
-
-    for (_metric_key, unit), group in groups.items():
-        if len(group) < 2:
-            continue
-        banks = sorted({fact.bank_label for fact in group})
-        periods = sorted(
-            {(fact.fiscal_year, fact.quarter, fact.period_label) for fact in group},
-            key=lambda item: (item[0], QUARTER_ORDER.get(item[1], 0)),
-        )
-        if len(banks) >= 2 and len(periods) == 1:
-            candidates.append(
-                ChartCandidate(
-                    _score_chart("peer_rank_bar", group, question),
-                    _make_option(
-                        "peer_rank_bar",
-                        group,
-                        title=f"{group[0].metric_name} peer ranking",
-                        subtitle=f"{periods[0][2]} | {unit or 'reported value'}",
-                        x_label=unit or "Reported value",
-                        y_label="Bank",
-                    ),
-                )
-            )
-        elif len(banks) == 1 and len(periods) >= 2:
-            candidates.append(
-                ChartCandidate(
-                    _score_chart("trend_line", group, question),
-                    _make_option(
-                        "trend_line",
-                        group,
-                        title=f"{banks[0]} {group[0].metric_name} trend",
-                        subtitle=f"{periods[0][2]} to {periods[-1][2]} | {unit or 'reported value'}",
-                        x_label="Period",
-                        y_label=unit or "Reported value",
-                    ),
-                )
-            )
-            candidates.append(
-                ChartCandidate(
-                    _score_chart("trend_bar", group, question) - 12,
-                    _make_option(
-                        "trend_bar",
-                        group,
-                        title=f"{banks[0]} {group[0].metric_name} by period",
-                        subtitle=f"{periods[0][2]} to {periods[-1][2]} | {unit or 'reported value'}",
-                        x_label="Period",
-                        y_label=unit or "Reported value",
-                    ),
-                )
-            )
-            if len(periods) == 2:
-                candidates.append(
-                    ChartCandidate(
-                        _score_chart("delta_bar", group, question),
-                        _make_delta_option(group, f"{banks[0]} {group[0].metric_name} change"),
-                    )
-                )
-        elif len(banks) >= 2 and len(periods) >= 2:
-            if len(periods) == 2:
-                candidates.append(
-                    ChartCandidate(
-                        _score_chart("slopegraph", group, question),
-                        _make_option(
-                            "slopegraph",
-                            group,
-                            title=f"{group[0].metric_name} peer movement",
-                            subtitle=f"{periods[0][2]} to {periods[-1][2]} | {unit or 'reported value'}",
-                            x_label="Period",
-                            y_label=unit or "Reported value",
-                        ),
-                    )
-                )
-                candidates.append(
-                    ChartCandidate(
-                        _score_chart("delta_bar", group, question) - 6,
-                        _make_delta_option(group, f"{group[0].metric_name} change across peers"),
-                    )
-                )
-            if len(periods) >= 3:
-                candidates.append(
-                    ChartCandidate(
-                        _score_chart("multi_series_line", group, question),
-                        _make_multi_series_option(group),
-                    )
-                )
-            candidates.append(
-                ChartCandidate(
-                    _score_chart("heatmap", group, question)
-                    + (12 if len(banks) * len(periods) >= 12 else -8),
-                    _make_option(
-                        "heatmap",
-                        group,
-                        title=f"{group[0].metric_name} by bank and period",
-                        subtitle=f"{len(banks)} banks x {len(periods)} periods | {unit or 'reported value'}",
-                        x_label="Period",
-                        y_label="Bank",
-                    ),
-                )
-            )
-            latest_year, latest_quarter, latest_label = periods[-1]
-            latest_group = [
-                fact
-                for fact in group
-                if fact.fiscal_year == latest_year and fact.quarter == latest_quarter
-            ]
-            if len({fact.bank_label for fact in latest_group}) >= 2:
-                candidates.append(
-                    ChartCandidate(
-                        _score_chart("peer_rank_bar", latest_group, question) - 10,
-                        _make_option(
-                            "peer_rank_bar",
-                            latest_group,
-                            title=f"{group[0].metric_name} latest peer ranking",
-                            subtitle=f"{latest_label} | {unit or 'reported value'}",
-                            x_label=unit or "Reported value",
-                            y_label="Bank",
-                        ),
-                    )
-                )
-
-    candidates.extend(_scatter_candidates_from_facts(facts, question))
-    candidates.extend(_small_multiple_candidates_from_facts(facts, question))
-    candidates.extend(_table_chart_candidates(findings, question))
-
-    filtered = _dedupe_candidates(
-        candidate for candidate in candidates if candidate.option.evidence_ids
-    )
-    filtered = sorted(filtered, key=lambda candidate: candidate.score, reverse=True)
-    options = [candidate.option for candidate in filtered[:MAX_CHART_OPTIONS]]
-    for index, option in enumerate(options, start=1):
-        option.chart_id = f"C{index}"
-    return options
+    """Return no deterministic charts; runtime charts are authored by the planner."""
+    _ = findings, question
+    return []
 
 
 def publish_chart_artifacts(
@@ -330,6 +882,7 @@ def publish_chart_artifacts(
             alt_text=_alt_text(option),
             spec=option.spec,
             evidence_ids=option.evidence_ids,
+            rationale=option.rationale,
         )
         payload = artifact.model_dump(mode="json")
         artifacts[artifact.chart_id] = payload
