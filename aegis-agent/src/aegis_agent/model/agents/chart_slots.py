@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -36,6 +36,7 @@ from .schemas import Finding, ResearchResult
 CHART_SLOT_RE = re.compile(r"\[\[CHART_SLOT:(.*?)\]\]", re.S)
 CHART_SLOT_START = "[[CHART_SLOT:"
 MAX_CHART_SLOT_WORKERS = 4
+PERIOD_SLOT_RE = re.compile(r"\b(Q[1-4])\s+(20\d{2})\b", re.I)
 
 
 class ChartSlot(BaseModel):
@@ -140,6 +141,14 @@ class ChartSlotStreamProcessor:
             return []
 
         slot.slot_id = self._unique_slot_id(slot.slot_id)
+        if not _slot_is_approved(slot, self.context):
+            get_logger().warning(
+                "chart_slot.unaudited_or_blocked",
+                execution_id=self.context.get("execution_id"),
+                chart_id=slot.slot_id,
+                chart_type=slot.chart_type,
+            )
+            return []
         pending = pending_chart_artifact(slot)
         _start_chart_slot_worker(slot, self.context)
         return [
@@ -174,7 +183,12 @@ def chart_slot_instruction_text() -> str:
         "fields are subtitle, banks, periods, metrics, and source_ids. Supported "
         f"chart_type values are: {chart_types}. Use small_multiple_panel for broad "
         "mixed-metric comparisons; do not ask for one shared-axis chart across "
-        "different metrics or units. Do not invent chart data in the response body."
+        "different metrics or units. Before finalizing with any CHART_SLOT marker, "
+        "call audit_chart_slots with every intended slot. If the audit reports missing "
+        "values and backfill_allowed is true, call run_research once with the suggested "
+        "research question and combinations, then call audit_chart_slots again. Only "
+        "emit slots from the latest approved_slots list. Skip blocked slots. Do not "
+        "invent chart data in the response body."
     )
 
 
@@ -204,6 +218,200 @@ def hidden_chart_artifact(slot: ChartSlot, reason: str) -> Dict[str, Any]:
         "rationale": reason,
         "status": "hidden",
     }
+
+
+def audit_chart_slots(arguments: Mapping[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+    """Audit proposed chart slots against the latest cumulative research result."""
+    raw_slots = arguments.get("slots") if isinstance(arguments, Mapping) else None
+    if not isinstance(raw_slots, list):
+        raw_slots = []
+
+    result = _latest_research_result(context)
+    approved_slots: List[Dict[str, Any]] = []
+    blocked_slots: List[Dict[str, Any]] = []
+    missing_values: List[Dict[str, Any]] = []
+
+    for raw_slot in raw_slots:
+        try:
+            slot = ChartSlot.model_validate(raw_slot)
+        except ValidationError as exc:
+            blocked_slots.append(
+                {
+                    "slot": raw_slot if isinstance(raw_slot, Mapping) else {},
+                    "reason": "invalid_slot",
+                    "message": str(exc),
+                }
+            )
+            continue
+
+        audit = _audit_one_chart_slot(slot, result)
+        if audit["approved"]:
+            approved_slots.append(slot.model_dump(mode="json"))
+        else:
+            blocked_slots.append(
+                {
+                    "slot": slot.model_dump(mode="json"),
+                    "reason": audit["reason"],
+                    "missing_values": audit["missing_values"],
+                }
+            )
+            missing_values.extend(audit["missing_values"])
+
+    approved_by_id = {slot["slot_id"]: slot for slot in approved_slots}
+    context["approved_chart_slots"] = approved_by_id
+    context["latest_chart_audit"] = {
+        "approved_slots": approved_slots,
+        "blocked_slots": blocked_slots,
+        "missing_values": missing_values,
+    }
+
+    backfill_allowed = bool(missing_values) and not bool(context.get("chart_backfill_used"))
+    if backfill_allowed:
+        context["chart_backfill_pending"] = True
+    else:
+        context["chart_backfill_pending"] = False
+
+    return {
+        "status": "success",
+        "approved_slots": approved_slots,
+        "blocked_slots": blocked_slots,
+        "missing_values": missing_values,
+        "suggested_research_question": _suggested_backfill_question(missing_values),
+        "suggested_combinations": _suggested_backfill_combinations(missing_values),
+        "backfill_allowed": backfill_allowed,
+    }
+
+
+def _audit_one_chart_slot(
+    slot: ChartSlot,
+    result: Optional[ResearchResult],
+) -> Dict[str, Any]:
+    if result is None:
+        return {
+            "approved": False,
+            "reason": "no_research_result",
+            "missing_values": _slot_missing_values(slot) or [{"slot_id": slot.slot_id}],
+        }
+
+    if len(slot.metrics) > 1 and slot.chart_type != "small_multiple_panel":
+        return {
+            "approved": False,
+            "reason": "mixed_metric_requires_small_multiple_panel",
+            "missing_values": [],
+        }
+
+    if not slot.banks or not slot.periods or not slot.metrics:
+        option = _deterministic_option_for_slot(slot, result.findings)
+        if option is not None and _artifact_is_supported(option, result.evidence_registry):
+            return {"approved": True, "reason": "deterministic_option_available", "missing_values": []}
+        return {"approved": False, "reason": "needs_slot_detail", "missing_values": []}
+
+    facts = _dedupe_facts(_facts_from_findings(result.findings))
+    valid_evidence_ids = _valid_registry_evidence_ids(result.evidence_registry)
+    missing = []
+    for bank in slot.banks:
+        for period in slot.periods:
+            for metric in slot.metrics:
+                if not _has_grounded_metric_fact(facts, valid_evidence_ids, bank, period, metric):
+                    missing.append(
+                        {
+                            "slot_id": slot.slot_id,
+                            "title": slot.title,
+                            "bank": bank,
+                            "period": period,
+                            "metric": metric,
+                        }
+                    )
+
+    if missing:
+        return {"approved": False, "reason": "missing_values", "missing_values": missing}
+    return {"approved": True, "reason": "complete_coverage", "missing_values": []}
+
+
+def _has_grounded_metric_fact(
+    facts: Sequence[MetricFact],
+    valid_evidence_ids: set[str],
+    bank: str,
+    period: str,
+    metric: str,
+) -> bool:
+    for fact in facts:
+        if not _matches_bank_filter(fact, [bank]):
+            continue
+        if not _matches_period_filter(fact, [period]):
+            continue
+        if not _matches_metric_filter(fact, [metric]):
+            continue
+        if set(fact.evidence_ids).issubset(valid_evidence_ids):
+            return True
+    return False
+
+
+def _slot_missing_values(slot: ChartSlot) -> List[Dict[str, Any]]:
+    if not slot.banks or not slot.periods or not slot.metrics:
+        return []
+    return [
+        {
+            "slot_id": slot.slot_id,
+            "title": slot.title,
+            "bank": bank,
+            "period": period,
+            "metric": metric,
+        }
+        for bank in slot.banks
+        for period in slot.periods
+        for metric in slot.metrics
+    ]
+
+
+def _suggested_backfill_question(missing_values: Sequence[Mapping[str, Any]]) -> str:
+    if not missing_values:
+        return ""
+    banks = _ordered_unique(str(item.get("bank") or "") for item in missing_values)
+    periods = _ordered_unique(str(item.get("period") or "") for item in missing_values)
+    metrics = _ordered_unique(str(item.get("metric") or "") for item in missing_values)
+    return (
+        "Find the exact numeric values and source evidence for "
+        f"{', '.join(metrics)} for {', '.join(banks)} in {', '.join(periods)}. "
+        "Return only values needed to complete approved chart comparisons."
+    )
+
+
+def _suggested_backfill_combinations(missing_values: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    combinations = []
+    seen = set()
+    for item in missing_values:
+        parsed = _period_to_combo_fields(str(item.get("period") or ""))
+        bank = str(item.get("bank") or "").strip()
+        if not bank or parsed is None:
+            continue
+        quarter, fiscal_year = parsed
+        key = (bank, fiscal_year, quarter)
+        if key in seen:
+            continue
+        seen.add(key)
+        combinations.append(
+            {"bank_symbol": bank, "fiscal_year": fiscal_year, "quarter": quarter}
+        )
+    return combinations
+
+
+def _period_to_combo_fields(period: str) -> Optional[Tuple[str, int]]:
+    match = PERIOD_SLOT_RE.search(period)
+    if not match:
+        return None
+    return match.group(1).upper(), int(match.group(2))
+
+
+def _ordered_unique(values: Iterable[str]) -> List[str]:
+    result = []
+    seen = set()
+    for value in values:
+        clean = str(value or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            result.append(clean)
+    return result
 
 
 async def build_chart_artifact_for_slot(
@@ -242,6 +450,20 @@ async def build_chart_artifact_for_slot(
 def _append_agent_event(events: List[Dict[str, Any]], content: str) -> None:
     if content:
         events.append({"type": "agent", "name": "aegis", "content": content})
+
+
+def _slot_is_approved(slot: ChartSlot, context: Mapping[str, Any]) -> bool:
+    approved_slots = context.get("approved_chart_slots")
+    if not isinstance(approved_slots, Mapping):
+        return False
+    approved = approved_slots.get(slot.slot_id)
+    if not isinstance(approved, Mapping):
+        return False
+    try:
+        approved_slot = ChartSlot.model_validate(approved)
+    except ValidationError:
+        return False
+    return slot.model_dump(mode="json") == approved_slot.model_dump(mode="json")
 
 
 def _parse_chart_slot(raw_slot: str) -> Optional[ChartSlot]:

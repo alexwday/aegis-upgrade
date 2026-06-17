@@ -10,6 +10,7 @@ import pytest
 from aegis_agent.model.agents.chart_slots import (
     ChartSlot,
     ChartSlotStreamProcessor,
+    audit_chart_slots,
     build_chart_artifact_for_slot,
 )
 from aegis_agent.model.agents.schemas import (
@@ -93,6 +94,7 @@ async def test_slot_marker_emits_pending_card_and_ready_artifact() -> None:
         "execution_id": "test",
         "background_event_queue": queue,
         "latest_research_result": _research_result(findings),
+        "approved_chart_slots": {"C1": _slot(title="TD vs RBC CET1").model_dump(mode="json")},
     }
     processor = ChartSlotStreamProcessor(context)
     marker = '[[CHART_SLOT:{"slot_id":"C1","title":"TD vs RBC CET1","chart_type":"peer_rank_bar","intent":"Compare CET1 ratio for TD and RBC","banks":["TD-CA","RY-CA"],"periods":["Q2 2026"],"metrics":["CET1 ratio"]}]]'
@@ -112,7 +114,22 @@ async def test_slot_marker_emits_pending_card_and_ready_artifact() -> None:
 @pytest.mark.asyncio
 async def test_split_slot_marker_is_buffered_until_complete() -> None:
     """A slot split across stream chunks should not leak raw marker text."""
-    processor = ChartSlotStreamProcessor({"execution_id": "test", "background_event_queue": asyncio.Queue()})
+    processor = ChartSlotStreamProcessor(
+        {
+            "execution_id": "test",
+            "background_event_queue": asyncio.Queue(),
+            "approved_chart_slots": {
+                "C1": ChartSlot.model_validate(
+                    {
+                        "slot_id": "C1",
+                        "title": "T",
+                        "chart_type": "peer_rank_bar",
+                        "intent": "I",
+                    }
+                ).model_dump(mode="json")
+            },
+        }
+    )
 
     first = processor.push('Intro\n[[CHART_SLOT:{"slot_id"')
     second = processor.push(':"C1","title":"T","chart_type":"peer_rank_bar","intent":"I"}]]\nDone')
@@ -139,7 +156,30 @@ def test_malformed_slot_json_is_stripped() -> None:
 @pytest.mark.asyncio
 async def test_duplicate_slot_ids_are_normalized_deterministically() -> None:
     """Duplicate slot IDs should not collide in the UI artifact registry."""
-    processor = ChartSlotStreamProcessor({"execution_id": "test", "background_event_queue": asyncio.Queue()})
+    processor = ChartSlotStreamProcessor(
+        {
+            "execution_id": "test",
+            "background_event_queue": asyncio.Queue(),
+            "approved_chart_slots": {
+                "C1": ChartSlot.model_validate(
+                    {
+                        "slot_id": "C1",
+                        "title": "T",
+                        "chart_type": "peer_rank_bar",
+                        "intent": "I",
+                    }
+                ).model_dump(mode="json"),
+                "C2": ChartSlot.model_validate(
+                    {
+                        "slot_id": "C2",
+                        "title": "T",
+                        "chart_type": "peer_rank_bar",
+                        "intent": "I",
+                    }
+                ).model_dump(mode="json"),
+            },
+        }
+    )
     marker = '{"slot_id":"C1","title":"T","chart_type":"peer_rank_bar","intent":"I"}'
 
     events = processor.push(f"[[CHART_SLOT:{marker}]]\n[[CHART_SLOT:{marker}]]")
@@ -150,6 +190,143 @@ async def test_duplicate_slot_ids_are_normalized_deterministically() -> None:
         "[[CHART:C2]]",
     ]
     await asyncio.gather(*processor.context["chart_worker_tasks"])
+
+
+def test_unaudited_slot_marker_is_stripped() -> None:
+    """Slots not approved by audit should not create loading cards."""
+    processor = ChartSlotStreamProcessor({"execution_id": "test", "background_event_queue": asyncio.Queue()})
+    marker = '{"slot_id":"C1","title":"T","chart_type":"peer_rank_bar","intent":"I"}'
+
+    events = processor.push(f"Before\n[[CHART_SLOT:{marker}]]\nAfter")
+
+    assert events == [
+        {"type": "agent", "name": "aegis", "content": "Before\n"},
+        {"type": "agent", "name": "aegis", "content": "\nAfter"},
+    ]
+
+
+def test_blocked_after_audit_slot_marker_is_stripped() -> None:
+    """A blocked audited slot should still be hidden from streamed markdown."""
+    context = {
+        "execution_id": "test",
+        "background_event_queue": asyncio.Queue(),
+        "latest_research_result": _research_result(
+            [_finding("TD-CA", "CET1 ratio", "13.1", "E1")]
+        ),
+        "chart_backfill_used": True,
+    }
+    audit_chart_slots({"slots": [_slot().model_dump(mode="json")]}, context)
+    processor = ChartSlotStreamProcessor(context)
+    marker = (
+        '{"slot_id":"C1","title":"TD vs RBC CET1","chart_type":"peer_rank_bar",'
+        '"intent":"Compare CET1 ratio for TD and RBC","banks":["TD-CA","RY-CA"],'
+        '"periods":["Q2 2026"],"metrics":["CET1 ratio"]}'
+    )
+
+    events = processor.push(f"Before\n[[CHART_SLOT:{marker}]]\nAfter")
+
+    assert not any(event["type"] == "chart_artifact" for event in events)
+    assert events == [
+        {"type": "agent", "name": "aegis", "content": "Before\n"},
+        {"type": "agent", "name": "aegis", "content": "\nAfter"},
+    ]
+
+
+def test_audit_blocks_missing_peer_metric_and_suggests_backfill() -> None:
+    """A peer chart should be blocked when one bank/period/metric cell is absent."""
+    findings = [_finding("TD-CA", "CET1 ratio", "13.1", "E1")]
+    context = {"latest_research_result": _research_result(findings)}
+
+    result = audit_chart_slots({"slots": [_slot().model_dump(mode="json")]}, context)
+
+    assert result["approved_slots"] == []
+    assert result["blocked_slots"][0]["reason"] == "missing_values"
+    assert result["missing_values"] == [
+        {
+            "slot_id": "C1",
+            "title": "TD vs RBC CET1",
+            "bank": "RY-CA",
+            "period": "Q2 2026",
+            "metric": "CET1 ratio",
+        }
+    ]
+    assert result["suggested_combinations"] == [
+        {"bank_symbol": "RY-CA", "fiscal_year": 2026, "quarter": "Q2"}
+    ]
+    assert result["backfill_allowed"] is True
+    assert context["chart_backfill_pending"] is True
+
+
+def test_audit_approves_complete_peer_metric_coverage() -> None:
+    """A peer chart with both bank values should be approved for final emission."""
+    findings = [
+        _finding("RY-CA", "CET1 ratio", "13.7", "E1"),
+        _finding("TD-CA", "CET1 ratio", "13.1", "E2"),
+    ]
+    context = {"latest_research_result": _research_result(findings)}
+
+    result = audit_chart_slots({"slots": [_slot().model_dump(mode="json")]}, context)
+
+    assert result["blocked_slots"] == []
+    assert result["approved_slots"][0]["slot_id"] == "C1"
+    assert context["approved_chart_slots"]["C1"]["chart_type"] == "peer_rank_bar"
+
+
+def test_audit_blocks_slot_without_dimensions() -> None:
+    """Slots need dimensions unless deterministic charting can already prove coverage."""
+    context = {"latest_research_result": _research_result([])}
+
+    result = audit_chart_slots(
+        {
+            "slots": [
+                _slot(banks=[], periods=[], metrics=[]).model_dump(mode="json")
+            ]
+        },
+        context,
+    )
+
+    assert result["approved_slots"] == []
+    assert result["blocked_slots"][0]["reason"] == "needs_slot_detail"
+
+
+def test_audit_requires_small_multiple_for_mixed_metric_slots() -> None:
+    """Broad mixed metrics should not be approved as one shared-axis chart."""
+    findings = [
+        _finding("RY-CA", "Total assets", "2100", "E1", unit="$"),
+        _finding("TD-CA", "Total assets", "1900", "E2", unit="$"),
+        _finding("RY-CA", "CET1 ratio", "13.7", "E3", unit="%"),
+        _finding("TD-CA", "CET1 ratio", "13.1", "E4", unit="%"),
+    ]
+
+    result = audit_chart_slots(
+        {
+            "slots": [
+                _slot(
+                    chart_type="peer_rank_bar",
+                    metrics=["Total assets", "CET1 ratio"],
+                ).model_dump(mode="json")
+            ]
+        },
+        {"latest_research_result": _research_result(findings)},
+    )
+
+    assert result["approved_slots"] == []
+    assert result["blocked_slots"][0]["reason"] == "mixed_metric_requires_small_multiple_panel"
+
+    approved = audit_chart_slots(
+        {
+            "slots": [
+                _slot(
+                    chart_type="small_multiple_panel",
+                    metrics=["Total assets", "CET1 ratio"],
+                ).model_dump(mode="json")
+            ]
+        },
+        {"latest_research_result": _research_result(findings)},
+    )
+
+    assert approved["blocked_slots"] == []
+    assert approved["approved_slots"][0]["chart_type"] == "small_multiple_panel"
 
 
 @pytest.mark.asyncio

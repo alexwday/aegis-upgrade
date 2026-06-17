@@ -1114,6 +1114,7 @@ def _aggregate_results(results: Sequence[ResearchResult]) -> ResearchResult:
     else:
         status = "no_available_data"
 
+    findings = _dedupe_findings(findings)
     source_summaries = [result.quick_summary for result in results if result.quick_summary]
     quick_summary = " ".join(source_summaries) or "No source research was completed."
     evidence_registry = _assign_evidence_ids(findings)
@@ -1149,6 +1150,50 @@ def _aggregate_results(results: Sequence[ResearchResult]) -> ResearchResult:
     )
     aggregate.chart_options = []
     return aggregate
+
+
+def _dedupe_findings(findings: Sequence[Finding]) -> List[Finding]:
+    """Return findings deduped by structured content before assigning evidence IDs."""
+    deduped: List[Finding] = []
+    seen = set()
+    for finding in findings:
+        key = (
+            finding.combo_label,
+            finding.finding_type,
+            finding.summary,
+            finding.details or "",
+            finding.metric.model_dump_json() if finding.metric is not None else "",
+            finding.table.model_dump_json() if finding.table is not None else "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(finding)
+    return deduped
+
+
+def _coerce_research_result(value: Any) -> Optional[ResearchResult]:
+    if isinstance(value, ResearchResult):
+        return value
+    if isinstance(value, dict):
+        try:
+            return ResearchResult.model_validate(value)
+        except Exception:  # pylint: disable=broad-exception-caught
+            return None
+    return None
+
+
+def _merge_latest_research_result(existing: Any, current: ResearchResult) -> ResearchResult:
+    """Merge sequential run_research results for chart audit/worker context."""
+    existing_result = _coerce_research_result(existing)
+    if existing_result is None:
+        return current
+    return _aggregate_results(
+        [
+            existing_result.model_copy(deep=True),
+            current.model_copy(deep=True),
+        ]
+    )
 
 
 async def _run_one_source(
@@ -1297,13 +1342,15 @@ async def run_research_tool(
             for source, result in zip(request.sources, gathered_results)
         ]
         result = _aggregate_results(source_results)
-        context["latest_research_result"] = result
-        context["latest_research_question"] = request.question
         source_dropdowns = [
             _format_source_result_dropdown(source, source_result)
             for source, source_result in zip(request.sources, source_results)
         ]
         result.dropdown_markdown = "\n\n".join(source_dropdowns)
+        context["latest_research_result"] = _merge_latest_research_result(
+            context.get("latest_research_result"), result
+        )
+        context["latest_research_question"] = request.question
         evidence_registry_payload = _evidence_registry_payload(result.evidence_registry)
 
         await emit_event(

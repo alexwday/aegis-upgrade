@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import ValidationError
 
+from .chart_slots import audit_chart_slots
 from .progress import ResearchProgressStore, emit_event
 from .research import run_research_tool
 from .schemas import (
@@ -114,6 +115,58 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
                     },
                 },
                 "required": ["question", "combinations"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "audit_chart_slots",
+            "description": (
+                "Audit intended async chart slots against the latest research before "
+                "finalizing. Use this before emitting any CHART_SLOT marker."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slots": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "slot_id": {"type": "string"},
+                                "title": {"type": "string"},
+                                "chart_type": {
+                                    "type": "string",
+                                    "enum": [
+                                        "peer_rank_bar",
+                                        "trend_line",
+                                        "trend_bar",
+                                        "multi_series_line",
+                                        "slopegraph",
+                                        "delta_bar",
+                                        "composition_stacked_bar",
+                                        "composition_100_bar",
+                                        "waterfall",
+                                        "scatter_plot",
+                                        "small_multiple_panel",
+                                        "heatmap",
+                                    ],
+                                },
+                                "intent": {"type": "string"},
+                                "subtitle": {"type": "string"},
+                                "banks": {"type": "array", "items": {"type": "string"}},
+                                "periods": {"type": "array", "items": {"type": "string"}},
+                                "metrics": {"type": "array", "items": {"type": "string"}},
+                                "source_ids": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["slot_id", "title", "chart_type", "intent"],
+                            "additionalProperties": False,
+                        },
+                    }
+                },
+                "required": ["slots"],
                 "additionalProperties": False,
             },
         },
@@ -231,8 +284,14 @@ async def dispatch_tool_call(
                 "missing_scope": ["valid research scope"],
                 "message": f"Research was not started because the scope was invalid: {exc}",
             }
+        if context.get("chart_backfill_pending") and not context.get("chart_backfill_used"):
+            context["chart_backfill_used"] = True
+            context["chart_backfill_pending"] = False
         progress_store = ResearchProgressStore(output_queue)
         return await run_research_tool(arguments, context, output_queue, progress_store)
+
+    if name == "audit_chart_slots":
+        return audit_chart_slots(arguments, context)
 
     if name == "start_final_response":
         try:

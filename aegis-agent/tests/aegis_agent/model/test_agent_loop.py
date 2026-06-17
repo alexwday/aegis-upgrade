@@ -8,6 +8,7 @@ from aegis_agent.model.agents.aegis_agent import (
     _source_scope_message,
     run_aegis_agent,
 )
+from aegis_agent.model.agents.research import _merge_latest_research_result
 from aegis_agent.model.agents.schemas import (
     DEFAULT_DOCUMENT_SOURCES,
     EvidenceReference,
@@ -369,6 +370,34 @@ async def test_agent_chart_slot_streams_loading_then_ready_artifact(monkeypatch)
                 ]
             }
             return
+        if calls == 2:
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "audit-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "audit_chart_slots",
+                                        "arguments": (
+                                            '{"slots":[{"slot_id":"C1","title":"TD vs RBC CET1",'
+                                            '"chart_type":"peer_rank_bar",'
+                                            '"intent":"Compare CET1 ratio for TD and RBC",'
+                                            '"banks":["TD-CA","RY-CA"],'
+                                            '"periods":["Q2 2026"],'
+                                            '"metrics":["CET1 ratio"]}]}'
+                                        ),
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+            return
         shell = (
             '<aegis_final_shell>{"render_mode":"custom","summary":null,'
             '"tiles":[],"body_style":"user_requested_format"}</aegis_final_shell>'
@@ -467,6 +496,145 @@ async def test_agent_chart_slot_streams_loading_then_ready_artifact(monkeypatch)
     assert events[pending_index]["content"]["title"] == "TD vs RBC CET1"
     assert pending_index < ready_index
     assert events[ready_index]["content"]["spec"]["chart_type"] == "peer_rank_bar"
+
+
+@pytest.mark.asyncio
+async def test_agent_audits_chart_slots_then_runs_one_backfill_before_final(monkeypatch) -> None:
+    """The agent should complete chart coverage before final-answer streaming."""
+    calls = 0
+
+    slot_args = (
+        '{"slots":[{"slot_id":"C1","title":"TD vs RBC CET1",'
+        '"chart_type":"peer_rank_bar",'
+        '"intent":"Compare CET1 ratio for TD and RBC",'
+        '"banks":["TD-CA","RY-CA"],'
+        '"periods":["Q2 2026"],'
+        '"metrics":["CET1 ratio"]}]}'
+    )
+
+    async def fake_stream_with_tools(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        tool_name = None
+        tool_args = None
+        tool_id = None
+        if calls == 1:
+            tool_name = "run_research"
+            tool_id = "research-1"
+            tool_args = (
+                '{"question":"Compare CET1","sources":["investor_slides"],'
+                '"combinations":[{"bank_symbol":"RY-CA","fiscal_year":2026,"quarter":"Q2"}]}'
+            )
+        elif calls == 2:
+            tool_name = "audit_chart_slots"
+            tool_id = "audit-1"
+            tool_args = slot_args
+        elif calls == 3:
+            tool_name = "run_research"
+            tool_id = "research-2"
+            tool_args = (
+                '{"question":"Find TD CET1 for chart backfill",'
+                '"sources":["investor_slides"],'
+                '"combinations":[{"bank_symbol":"TD-CA","fiscal_year":2026,"quarter":"Q2"}]}'
+            )
+        elif calls == 4:
+            tool_name = "audit_chart_slots"
+            tool_id = "audit-2"
+            tool_args = slot_args
+
+        if tool_name is not None:
+            yield {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": tool_id,
+                                    "type": "function",
+                                    "function": {"name": tool_name, "arguments": tool_args},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+            return
+
+        shell = (
+            '<aegis_final_shell>{"render_mode":"custom","summary":null,'
+            '"tiles":[],"body_style":"user_requested_format"}</aegis_final_shell>'
+        )
+        slot = (
+            '[[CHART_SLOT:{"slot_id":"C1","title":"TD vs RBC CET1",'
+            '"chart_type":"peer_rank_bar","intent":"Compare CET1 ratio for TD and RBC",'
+            '"banks":["TD-CA","RY-CA"],"periods":["Q2 2026"],"metrics":["CET1 ratio"]}]]'
+        )
+        yield {"choices": [{"delta": {"content": shell + "Lead\n" + slot + "\nTail"}}]}
+
+    async def fake_run_research_tool(arguments, context, *_args, **_kwargs):
+        symbol = arguments["combinations"][0]["bank_symbol"]
+        value = "13.7" if symbol == "RY-CA" else "13.1"
+        finding = Finding(
+            combo_label=f"Investor slides: {symbol} Q2 2026",
+            summary=f"{symbol} CET1 ratio was {value}%.",
+            finding_type="quantitative",
+            metric=MetricObservation(
+                metric_name="CET1 ratio",
+                metric_value=value,
+                unit="%",
+                period="Q2 2026",
+            ),
+            evidence_refs=[
+                EvidenceReference(
+                    source_id="investor_slides",
+                    source_label="Investor slides",
+                    display_label=f"{symbol} slide",
+                )
+            ],
+        )
+        result = ResearchResult(
+            status="success",
+            quick_summary=f"{symbol} found.",
+            findings=[finding],
+        )
+        context["latest_research_result"] = _merge_latest_research_result(
+            context.get("latest_research_result"), result
+        )
+        return result.model_dump(mode="json")
+
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.aegis_agent.stream_with_tools",
+        fake_stream_with_tools,
+    )
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.tools.run_research_tool",
+        fake_run_research_tool,
+    )
+
+    events = [
+        event
+        async for event in run_aegis_agent(
+            [{"role": "user", "content": "Compare TD and RBC CET1 for Q2 2026."}],
+            {"execution_id": "test"},
+        )
+    ]
+
+    first_agent_index = next(index for index, event in enumerate(events) if event["type"] == "agent")
+    final_start_index = next(
+        index for index, event in enumerate(events) if event["type"] == "final_response_start"
+    )
+    ready_index = next(
+        index
+        for index, event in enumerate(events)
+        if event["type"] == "chart_artifact" and event["content"]["status"] == "ready"
+    )
+
+    assert calls == 5
+    assert final_start_index < first_agent_index
+    assert events[first_agent_index]["content"] == "Lead\n"
+    assert any(event.get("content") == "[[CHART:C1]]" for event in events)
+    assert ready_index > first_agent_index
 
 
 @pytest.mark.asyncio

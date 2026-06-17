@@ -8,13 +8,16 @@ import pytest
 
 from aegis_agent.model.agents.research import (
     _aggregate_results,
+    _merge_latest_research_result,
     _result_from_document_raw,
     run_research_tool,
 )
 from aegis_agent.model.agents.schemas import (
     BankPeriodCombination,
     DEFAULT_DOCUMENT_SOURCES,
+    EvidenceReference,
     Finding,
+    MetricObservation,
     ResearchResult,
 )
 
@@ -146,6 +149,67 @@ def test_aggregate_assigns_unique_evidence_ids_across_sources() -> None:
     assert "E1" in aggregate.evidence_registry["supplementary_financials"]
     assert aggregate.evidence_registry["supplementary_financials"]["E1"].display_label
     assert aggregate.citations[0].evidence_id == "E1"
+
+
+def test_merge_latest_research_result_combines_backfill_findings() -> None:
+    """Sequential research calls should merge into cumulative charting context."""
+    first = ResearchResult(
+        status="success",
+        quick_summary="TD found.",
+        findings=[
+            Finding(
+                combo_label="Investor slides: TD-CA Q2 2026",
+                summary="TD-CA CET1 ratio was 13.1%.",
+                finding_type="quantitative",
+                metric=MetricObservation(
+                    metric_name="CET1 ratio",
+                    metric_value="13.1",
+                    unit="%",
+                    period="Q2 2026",
+                ),
+                evidence_refs=[
+                    EvidenceReference(
+                        source_id="investor_slides",
+                        source_label="Investor slides",
+                        display_label="TD slide",
+                    )
+                ],
+            )
+        ],
+    )
+    backfill = ResearchResult(
+        status="success",
+        quick_summary="RBC found.",
+        findings=[
+            Finding(
+                combo_label="Investor slides: RY-CA Q2 2026",
+                summary="RY-CA CET1 ratio was 13.7%.",
+                finding_type="quantitative",
+                metric=MetricObservation(
+                    metric_name="CET1 ratio",
+                    metric_value="13.7",
+                    unit="%",
+                    period="Q2 2026",
+                ),
+                evidence_refs=[
+                    EvidenceReference(
+                        source_id="investor_slides",
+                        source_label="Investor slides",
+                        display_label="RBC slide",
+                    )
+                ],
+            )
+        ],
+    )
+
+    merged = _merge_latest_research_result(first, backfill)
+
+    assert {finding.combo_label for finding in merged.findings} == {
+        "Investor slides: TD-CA Q2 2026",
+        "Investor slides: RY-CA Q2 2026",
+    }
+    assert sorted(merged.evidence_registry["investor_slides"]) == ["E1", "E2"]
+    assert all(ref.evidence_id for finding in merged.findings for ref in finding.evidence_refs)
 
 
 @pytest.mark.asyncio
