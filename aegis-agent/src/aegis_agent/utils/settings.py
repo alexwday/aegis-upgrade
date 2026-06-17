@@ -30,7 +30,6 @@ class SSLConfig:
     """SSL configuration settings."""
 
     verify: bool
-    cert_path: str
 
 
 @dataclass
@@ -102,7 +101,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         ALLOWED_ROLES: Comma-separated list of allowed message roles
         MAX_HISTORY_LENGTH: Number of recent messages to keep
         SSL_VERIFY: "true"/"false" to enable/disable SSL verification
-        SSL_CERT_PATH: Path to certificate file when SSL_VERIFY=true
+        SSL_VERIFY=true requires rbc_security to enable RBC certificates
         OAUTH_ENDPOINT: OAuth token endpoint URL
         OAUTH_CLIENT_ID: OAuth client ID for authentication
         OAUTH_CLIENT_SECRET: OAuth client secret for authentication
@@ -163,7 +162,6 @@ class Config:  # pylint: disable=too-many-instance-attributes
         # SSL Configuration
         self.ssl = SSLConfig(
             verify=os.getenv("SSL_VERIFY", "false").lower() == "true",
-            cert_path=os.getenv("SSL_CERT_PATH", ""),
         )
 
         # OAuth Configuration
@@ -244,7 +242,6 @@ class Config:  # pylint: disable=too-many-instance-attributes
 
         # SSL attributes
         self.ssl_verify = self.ssl.verify
-        self.ssl_cert_path = self.ssl.cert_path
 
         # Conversation attributes
         self.include_system_messages = self.conversation.include_system_messages

@@ -14,6 +14,7 @@ from utils.config_setup import (
     get_oauth_config,
     get_stage_model_config,
 )
+from utils.ssl_setup import enable_rbc_certs
 from utils.source_context import get_source_context
 from .oauth_connector import OAuthClient
 
@@ -95,6 +96,8 @@ class LLMClient:
         self.auth_mode = get_llm_auth_mode()
         self.endpoint = get_llm_endpoint()
         self.verify_ssl = verify_ssl
+        if self.verify_ssl:
+            enable_rbc_certs()
         self.oauth_client = None
         self.oauth_openai_client = None
         self.oauth_token = ""

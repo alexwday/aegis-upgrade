@@ -274,7 +274,7 @@ async def _get_or_create_async_client(
 
     Args:
         auth_token: Authentication token from auth config
-        ssl_config: Optional SSL configuration with 'verify' and optional 'cert_path'
+        ssl_config: Optional SSL configuration with 'verify'
 
     Returns:
         Configured AsyncOpenAI client instance.
@@ -283,15 +283,13 @@ async def _get_or_create_async_client(
 
     # Create cache key from auth token and SSL config
     ssl_verify = ssl_config.get("verify", True) if ssl_config else True
-    ssl_cert = ssl_config.get("cert_path", "") if ssl_config else ""
-    cache_key = f"{auth_token or 'no-auth'}_{ssl_verify}_{ssl_cert}"
+    cache_key = f"{auth_token or 'no-auth'}_{ssl_verify}"
 
     # Return cached client if exists
     if cache_key in _async_client_cache:
         logger.debug(
             "Using cached async LLM client",
             ssl_verify=ssl_verify,
-            ssl_cert=bool(ssl_cert),
         )
         return _async_client_cache[cache_key]
 
@@ -301,10 +299,8 @@ async def _get_or_create_async_client(
         if not ssl_config.get("verify", True):
             # SSL verification disabled
             httpx_client_kwargs["verify"] = False
-        elif ssl_config.get("cert_path"):
-            # Use custom certificate
-            httpx_client_kwargs["verify"] = ssl_config["cert_path"]
-        # else: use default SSL verification
+        # else: use default SSL verification after setup_ssl() has enabled
+        # rbc_security certificates.
 
     # Create httpx client with SSL configuration
     http_client = httpx.AsyncClient(
@@ -327,7 +323,6 @@ async def _get_or_create_async_client(
         base_url=config.llm.base_url,
         timeout=180,
         ssl_verify=ssl_verify,
-        ssl_cert=bool(ssl_cert),
     )
 
     return client

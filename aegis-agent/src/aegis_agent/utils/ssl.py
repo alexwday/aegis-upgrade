@@ -1,38 +1,35 @@
-"""
-SSL configuration module.
+"""SSL configuration module."""
 
-This module handles SSL certificate loading based on environment configuration.
-"""
-
-import os
-from typing import Dict, Optional, Union
+import importlib
+from typing import Dict, Union
 
 from .logging import get_logger
 from .settings import config
 
 
-def setup_ssl() -> Dict[str, Union[bool, Optional[str]]]:
+def setup_ssl() -> Dict[str, Union[bool, str, None]]:
     """
     Setup SSL configuration based on environment variables.
 
-    Checks SSL_VERIFY and SSL_CERT_PATH environment variables and returns
-    a consistent output schema for both verify and non-verify scenarios.
+    Checks SSL_VERIFY and returns a consistent output schema for both verify and
+    non-verify scenarios. When SSL verification is enabled, RBC certificates
+    must be enabled through rbc_security; no certificate-file or system-cert
+    fallback is supported.
 
     Returns:
         Dictionary with SSL configuration:
         - "success": bool - Whether SSL setup succeeded
         - "verify": bool - Whether to verify SSL (only if success=True)
-        - "cert_path": str or None - Path to certificate file if verify is True
         - "status": str - Operation status ("Success" or "Failure")
         - "error": str or None - Error message if setup failed
         - "decision_details": str - Human-readable description of the outcome
 
-        # Returns: {"success": True, "verify": False, "cert_path": None,
+        # Returns: {"success": True, "verify": False,
         #          "status": "disabled", "error": None,
         #          "decision_details": "SSL verification: disabled"}
-        # Returns: {"success": False, "verify": False, "cert_path": None,
-        #          "status": "failed", "error": "Certificate not found",
-        #          "decision_details": "SSL setup failed: Certificate not found"}
+        # Returns: {"success": False, "verify": True,
+        #          "status": "Failure", "error": "rbc_security not available",
+        #          "decision_details": "SSL setup failed: rbc_security not available"}
     """
     logger = get_logger()
 
@@ -43,50 +40,47 @@ def setup_ssl() -> Dict[str, Union[bool, Optional[str]]]:
             return {
                 "success": True,
                 "verify": False,
-                "cert_path": None,
                 "status": "Success",
                 "error": None,
                 "decision_details": "SSL verification: disabled",
             }
 
-        # SSL verification is enabled
-        cert_path = config.ssl_cert_path
-
-        if cert_path:
-            # Expand user path if needed
-            cert_path = os.path.expanduser(cert_path)
-
-            # Check if certificate file exists
-            if not os.path.exists(cert_path):
-                error_msg = f"SSL certificate file not found: {cert_path}"
-                logger.error(error_msg)
-                return {
-                    "success": False,
-                    "verify": False,
-                    "cert_path": None,
-                    "status": "Failure",
-                    "error": error_msg,
-                    "decision_details": f"SSL setup failed: {error_msg}",
-                }
-
-            logger.info("SSL verification enabled with certificate", cert_path=cert_path)
+        try:
+            rbc_security = importlib.import_module("rbc_security")
+        except ImportError as exc:
+            error_msg = (
+                "SSL_VERIFY=true requires the rbc_security package; "
+                "no SSL fallback is configured."
+            )
+            logger.error(error_msg)
             return {
-                "success": True,
+                "success": False,
                 "verify": True,
-                "cert_path": cert_path,
-                "status": "Success",
-                "error": None,
-                "decision_details": "SSL verification: enabled with certificate",
+                "status": "Failure",
+                "error": error_msg,
+                "decision_details": f"SSL setup failed: {error_msg}",
             }
 
-        logger.info("SSL verification enabled with system certificates")
+        try:
+            rbc_security.enable_certs()
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            error_msg = f"Failed to enable RBC SSL certificates: {str(exc)}"
+            logger.error(error_msg)
+            return {
+                "success": False,
+                "verify": True,
+                "status": "Failure",
+                "error": error_msg,
+                "decision_details": f"SSL setup failed: {error_msg}",
+            }
+
+        logger.info("SSL verification enabled with rbc_security")
         return {
             "success": True,
             "verify": True,
-            "cert_path": None,
-            "status": "enabled",
+            "status": "Success",
             "error": None,
-            "decision_details": "SSL verification: enabled with system certificates",
+            "decision_details": "SSL verification: enabled with rbc_security",
         }
 
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -95,8 +89,7 @@ def setup_ssl() -> Dict[str, Union[bool, Optional[str]]]:
         logger.error(error_msg)
         return {
             "success": False,
-            "verify": False,
-            "cert_path": None,
+            "verify": True,
             "status": "Failure",
             "error": error_msg,
             "decision_details": f"SSL setup failed: {str(e)}",

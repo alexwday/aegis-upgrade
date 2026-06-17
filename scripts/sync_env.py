@@ -198,7 +198,6 @@ def agent_env(values: Mapping[str, str]) -> OrderedDict[str, str]:
     out["AUTH_METHOD"] = normalize_agent_auth_mode(values)
     out["API_KEY"] = first(values, "API_KEY", "OPENAI_API_KEY")
     out["SSL_VERIFY"] = values.get("SSL_VERIFY", "false")
-    out["SSL_CERT_PATH"] = values.get("SSL_CERT_PATH", "")
     for key in (
         "OAUTH_ENDPOINT",
         "OAUTH_CLIENT_ID",

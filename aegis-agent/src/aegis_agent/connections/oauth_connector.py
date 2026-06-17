@@ -65,11 +65,9 @@ async def get_oauth_token(
         endpoint=config.oauth_endpoint,
     )
 
-    # Determine SSL verification setting
-    if ssl_config["verify"]:
-        verify = ssl_config["cert_path"] if ssl_config["cert_path"] else True
-    else:
-        verify = False
+    # Determine SSL verification setting. SSL_VERIFY=true is prepared by
+    # setup_ssl(), which must enable RBC certificates through rbc_security.
+    verify = bool(ssl_config["verify"])
 
     # Configure async client with timeout
     async with httpx.AsyncClient(verify=verify, timeout=httpx.Timeout(30.0)) as client:

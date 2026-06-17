@@ -40,6 +40,17 @@ def _auth_setup_message(auth_error: str | None = None) -> str:
     )
 
 
+def _ssl_setup_message(ssl_error: str | None = None) -> str:
+    """Return a concise setup message for failed SSL certificate setup."""
+    detail = f" Current SSL error: {ssl_error}." if ssl_error else ""
+    return (
+        "Aegis is not ready because SSL verification is enabled but RBC certificates "
+        "were not configured. Install `rbc_security` in the runtime environment or set "
+        "`SSL_VERIFY=false` for local-only development, then restart the server."
+        f"{detail}"
+    )
+
+
 def _user_facing_error(exc: Exception) -> str:
     """Map backend dependency exceptions to chat-safe messages."""
     message = str(exc)
@@ -99,6 +110,13 @@ async def model(
             decision_details=ssl_config.get("decision_details", "SSL setup completed"),
             error_message=ssl_config.get("error"),
         )
+        if not ssl_config.get("success"):
+            yield {
+                "type": "error",
+                "name": "aegis",
+                "content": _ssl_setup_message(ssl_config.get("error")),
+            }
+            return
 
         auth_start = datetime.now(timezone.utc)
         auth_config = await setup_authentication(execution_id, ssl_config)

@@ -59,7 +59,6 @@ OAUTH_ENDPOINT=<token-endpoint>
 OAUTH_CLIENT_ID=<client-id>
 OAUTH_CLIENT_SECRET=<client-secret>
 SSL_VERIFY=true
-SSL_CERT_PATH=<optional-cert-path>
 POSTGRES_HOST=<host>
 POSTGRES_DATABASE=<database>
 POSTGRES_USER=<user>

@@ -24,6 +24,45 @@ def stub_monitoring(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_model_stops_with_friendly_ssl_error(monkeypatch) -> None:
+    """Failed SSL setup should stop before auth or agent work."""
+    monkeypatch.setattr(model_main, "postgresql_prompts", lambda: None)
+    monkeypatch.setattr(
+        model_main,
+        "setup_ssl",
+        lambda: {
+            "success": False,
+            "status": "Failure",
+            "verify": True,
+            "error": "SSL_VERIFY=true requires the rbc_security package",
+        },
+    )
+
+    async def fail_setup_authentication(*_args, **_kwargs):
+        raise AssertionError("auth should not run when SSL setup failed")
+
+    async def fail_run_agent(*_args, **_kwargs):
+        raise AssertionError("agent should not run when SSL setup failed")
+        yield {}
+
+    monkeypatch.setattr(model_main, "setup_authentication", fail_setup_authentication)
+    monkeypatch.setattr(model_main, "run_aegis_agent", fail_run_agent)
+
+    events = [
+        event
+        async for event in model_main.model(
+            {"messages": [{"role": "user", "content": "hi"}]}
+        )
+    ]
+
+    assert len(events) == 1
+    assert events[0]["type"] == "error"
+    assert events[0]["name"] == "aegis"
+    assert "SSL verification is enabled" in events[0]["content"]
+    assert "rbc_security" in events[0]["content"]
+
+
+@pytest.mark.asyncio
 async def test_model_stops_with_friendly_auth_error(monkeypatch) -> None:
     """Missing auth config should not continue into prompt/database work."""
     monkeypatch.setattr(model_main, "postgresql_prompts", lambda: None)
