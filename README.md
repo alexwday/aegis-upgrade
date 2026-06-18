@@ -11,8 +11,15 @@ aegis-documents/      Canonical Q1/Q2 source document drop folders
 aegis-pipeline/       Per-source ETL pipelines
 aegis-prompts/        Canonical YAML copy of Aegis prompt rows
 aegis-table-schemas/  PostgreSQL table DDL exports
+docs/                 V2 planning notes and architecture docs
 scripts/              Root scripts for setup, env sync, DB, prompts, and pipelines
 ```
+
+## Aegis V2 Planning
+
+The V2 rebuild is being planned UI-first in `docs/aegis_v2/`. The current agent
+and UI should be treated as a frozen V1 reference while preserving the durable
+pipeline, table, prompt, and retrieval infrastructure.
 
 ## Push To A New GitHub Repo
 
