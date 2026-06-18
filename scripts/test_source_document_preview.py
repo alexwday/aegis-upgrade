@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import argparse
 import html
+import shutil
+import subprocess
 import sys
+import tempfile
 import webbrowser
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -30,6 +33,17 @@ PUBLIC_SCHEMA = "public"
 DOCUMENTS_TABLE = "aegis_source_documents"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
+PDF_MIME_TYPE = "application/pdf"
+CONVERTIBLE_PREVIEW_TYPES = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
+CONVERTIBLE_EXTENSIONS = {"docx", "xlsx"}
+SOFFICE_CANDIDATES = (
+    "soffice",
+    "libreoffice",
+    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+)
 
 
 @dataclass(frozen=True)
@@ -169,6 +183,9 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
             if parsed.path.startswith("/preview/"):
                 self.handle_preview(parsed.path, parse_qs(parsed.query))
                 return
+            if parsed.path.startswith("/preview-document/"):
+                self.handle_preview_document(parsed.path)
+                return
             if parsed.path.startswith("/document/"):
                 self.handle_document(parsed.path)
                 return
@@ -198,6 +215,30 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
             page_number = requested_page or reference.page_number
             self.send_html(render_preview(reference, page_number))
 
+        def handle_preview_document(self, path: str) -> None:
+            try:
+                source, file_id = source_and_file_id_from_path(
+                    path,
+                    "preview-document",
+                )
+                payload = load_document_bytes(state.db_config, source, file_id)
+                preview_payload = build_preview_payload(payload)
+            except ValueError as exc:
+                self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                return
+            except LookupError as exc:
+                self.send_error(HTTPStatus.NOT_FOUND, str(exc))
+                return
+            except RuntimeError as exc:
+                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+                return
+
+            self.send_binary(
+                content=preview_payload["content"],
+                content_type=preview_payload["mime_type"],
+                filename=preview_payload["filename"],
+            )
+
         def handle_document(self, path: str) -> None:
             try:
                 source, file_id = source_and_file_id_from_path(path, "document")
@@ -211,13 +252,11 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
 
             filename = safe_header_filename(payload["filename"])
             content = bytes(payload["original_bytes"])
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", payload["mime_type"])
-            self.send_header("Content-Length", str(len(content)))
-            self.send_header("Content-Disposition", f'inline; filename="{filename}"')
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(content)
+            self.send_binary(
+                content=content,
+                content_type=payload["mime_type"],
+                filename=filename,
+            )
 
         def send_html(self, body: str, status: HTTPStatus = HTTPStatus.OK) -> None:
             self.send_text(body, status=status, content_type="text/html; charset=utf-8")
@@ -236,6 +275,21 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(data)
+
+        def send_binary(
+            self,
+            *,
+            content: bytes,
+            content_type: str,
+            filename: str,
+        ) -> None:
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(content)
 
         def log_message(self, format: str, *args: Any) -> None:
             if not state.quiet:
@@ -402,6 +456,9 @@ def load_document_bytes(
         SELECT
             d.filename,
             d.mime_type,
+            d.file_type,
+            d.preview_mime_type,
+            d.preview_bytes,
             d.original_bytes
         FROM {documents} AS d
         WHERE d.file_id = %s
@@ -429,8 +486,102 @@ def load_document_bytes(
     return {
         "filename": str(row[0]),
         "mime_type": str(row[1]),
-        "original_bytes": row[2],
+        "file_type": str(row[2]),
+        "preview_mime_type": str(row[3]) if row[3] else "",
+        "preview_bytes": row[4],
+        "original_bytes": row[5],
     }
+
+
+def build_preview_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Return bytes suitable for browser preview, converting Office files to PDF."""
+    filename = str(payload["filename"])
+    mime_type = str(payload["mime_type"])
+    file_type = str(payload["file_type"]).lower()
+    original_bytes = bytes(payload["original_bytes"])
+    preview_mime_type = str(payload.get("preview_mime_type") or "")
+    preview_bytes = payload.get("preview_bytes")
+
+    if preview_mime_type == PDF_MIME_TYPE and preview_bytes:
+        return {
+            "filename": pdf_filename(filename),
+            "mime_type": PDF_MIME_TYPE,
+            "content": bytes(preview_bytes),
+        }
+    if mime_type == PDF_MIME_TYPE:
+        return {
+            "filename": safe_header_filename(filename),
+            "mime_type": PDF_MIME_TYPE,
+            "content": original_bytes,
+        }
+    if mime_type in CONVERTIBLE_PREVIEW_TYPES or file_type in CONVERTIBLE_EXTENSIONS:
+        return {
+            "filename": pdf_filename(filename),
+            "mime_type": PDF_MIME_TYPE,
+            "content": convert_office_bytes_to_pdf(
+                original_bytes,
+                filename=filename,
+                file_type=file_type,
+            ),
+        }
+    return {
+        "filename": safe_header_filename(filename),
+        "mime_type": mime_type,
+        "content": original_bytes,
+    }
+
+
+def convert_office_bytes_to_pdf(
+    content: bytes,
+    *,
+    filename: str,
+    file_type: str,
+) -> bytes:
+    """Convert Office bytes to PDF with LibreOffice for browser preview."""
+    soffice = resolve_soffice()
+    suffix = Path(filename).suffix or f".{file_type}"
+    with tempfile.TemporaryDirectory(prefix="aegis-preview-") as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        input_path = temp_dir / f"source{suffix}"
+        input_path.write_bytes(content)
+        try:
+            result = subprocess.run(
+                [
+                    soffice,
+                    "--headless",
+                    "--convert-to",
+                    "pdf",
+                    "--outdir",
+                    str(temp_dir),
+                    str(input_path),
+                ],
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=90,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("LibreOffice PDF conversion timed out.") from exc
+        output_path = input_path.with_suffix(".pdf")
+        if result.returncode != 0 or not output_path.is_file():
+            raise RuntimeError(
+                "LibreOffice failed to convert source document to PDF: "
+                f"{result.stderr.strip() or result.stdout.strip()}"
+            )
+        return output_path.read_bytes()
+
+
+def resolve_soffice() -> str:
+    """Return a LibreOffice executable path."""
+    for candidate in SOFFICE_CANDIDATES:
+        resolved = shutil.which(candidate) if "/" not in candidate else candidate
+        if resolved and Path(resolved).is_file():
+            return resolved
+    raise RuntimeError(
+        "LibreOffice/soffice was not found. Install LibreOffice or add soffice "
+        "to PATH to preview xlsx/docx documents as PDFs."
+    )
 
 
 def reference_from_row(row: tuple[Any, ...], source: RetrievalSource) -> Reference:
@@ -541,7 +692,8 @@ def render_source_card(status: SourceStatus) -> str:
 
 def render_preview(reference: Reference, page_number: int | None) -> str:
     """Render the clicked reference preview page."""
-    doc_src = document_url(reference, page_number=page_number)
+    doc_src = preview_document_url(reference, page_number=page_number)
+    original_src = document_url(reference)
     page_text = str(page_number) if page_number is not None else "none"
     return f"""<!doctype html>
 <html lang="en">
@@ -558,7 +710,10 @@ def render_preview(reference: Reference, page_number: int | None) -> str:
       <span>{escape(reference.source_label)} &middot; page {escape(page_text)}</span>
     </div>
     <a class="button secondary" href="{escape(doc_src, quote=True)}" target="_blank">
-      Open in new tab
+      Open PDF preview
+    </a>
+    <a class="button secondary" href="{escape(original_src, quote=True)}" target="_blank">
+      Open original bytes
     </a>
   </div>
   <iframe class="document-frame" src="{escape(doc_src, quote=True)}"></iframe>
@@ -811,6 +966,19 @@ def document_url(ref: Reference, page_number: int | None = None) -> str:
     return url
 
 
+def preview_document_url(ref: Reference, page_number: int | None = None) -> str:
+    """Return the browser-preview URL for one source document."""
+    url = (
+        f"/preview-document/{quote(ref.source_key, safe='')}/"
+        f"{quote(ref.file_id, safe='')}"
+        f"?chunk_id={quote(ref.chunk_id, safe='')}"
+    )
+    resolved_page = page_number if page_number is not None else ref.page_number
+    if resolved_page is not None:
+        url += f"#page={resolved_page}"
+    return url
+
+
 def first_query_value(query: Mapping[str, list[str]], key: str) -> str:
     """Return the first query-string value for a key."""
     values = query.get(key) or []
@@ -831,6 +999,11 @@ def parse_page_number(value: Any) -> int | None:
 def safe_header_filename(filename: str) -> str:
     """Return a conservative filename for Content-Disposition."""
     return filename.replace("\\", "_").replace("/", "_").replace('"', "_")
+
+
+def pdf_filename(filename: str) -> str:
+    """Return a safe PDF preview filename."""
+    return safe_header_filename(str(Path(filename).with_suffix(".pdf")))
 
 
 def escape(value: Any, quote: bool = True) -> str:

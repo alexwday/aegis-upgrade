@@ -168,6 +168,9 @@ source, then streams the selected document bytes from Postgres when clicked:
 .venv/bin/python scripts/test_source_document_preview.py --env-file .env
 ```
 
+PDFs stream directly. XLSX and DOCX previews are converted to temporary PDFs
+with LibreOffice, so `soffice` must be installed or available on `PATH`.
+
 ## Run The Agent
 
 ```bash
