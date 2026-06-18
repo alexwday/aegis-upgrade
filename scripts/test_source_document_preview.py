@@ -211,7 +211,14 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 requested_page=requested_page,
                 requested_sheet=requested_sheet,
             )
-            self.send_html(render_preview(reference, page_number, requested_sheet))
+            self.send_html(
+                render_preview(
+                    reference,
+                    page_number,
+                    requested_page=requested_page,
+                    requested_sheet=requested_sheet,
+                )
+            )
 
         def handle_preview_document(self, path: str) -> None:
             try:
@@ -641,14 +648,19 @@ def render_source_card(status: SourceStatus) -> str:
 def render_preview(
     reference: Reference,
     page_number: int | None,
-    sheet_name: str = "",
+    requested_page: int | None,
+    requested_sheet: str = "",
 ) -> str:
     """Render the clicked reference preview page."""
     doc_src = preview_document_url(reference, page_number=page_number)
     original_src = document_url(reference)
     page_text = str(page_number) if page_number is not None else "none"
-    if sheet_name:
-        locator_text = f"sheet {sheet_name} -> preview page {page_text}"
+    if requested_sheet:
+        locator_text = f"sheet {requested_sheet} -> preview page {page_text}"
+    elif reference.file_type.lower() == "xml":
+        unit_number = requested_page or reference.page_number
+        unit_text = str(unit_number) if unit_number is not None else "none"
+        locator_text = f"unit {unit_text} -> preview page {page_text}"
     else:
         locator_text = f"preview page {page_text}"
     return f"""<!doctype html>
@@ -940,13 +952,22 @@ def resolve_reference_page(
     requested_sheet: str,
 ) -> int | None:
     """Resolve the preview PDF page for page- or sheet-based references."""
+    file_type = ref.file_type.lower()
     sheet_name = requested_sheet or (
-        ref.chunk_name if ref.file_type.lower() == "xlsx" else ""
+        ref.chunk_name if file_type == "xlsx" else ""
     )
     if sheet_name:
         sheet_page = preview_page_for_sheet(ref.preview_metadata, sheet_name)
         if sheet_page is not None:
             return sheet_page
+    if file_type == "xml":
+        unit_number = requested_page or ref.page_number
+        unit_page = preview_page_for_transcript_unit(
+            ref.preview_metadata,
+            unit_number,
+        )
+        if unit_page is not None:
+            return unit_page
     return requested_page or ref.page_number
 
 
@@ -961,7 +982,27 @@ def preview_page_for_sheet(
             continue
         if str(sheet.get("name", "")).casefold() != requested:
             continue
-        return parse_page_number(sheet.get("preview_page"))
+        return parse_page_number(
+            sheet.get("preview_start_page") or sheet.get("preview_page")
+        )
+    return None
+
+
+def preview_page_for_transcript_unit(
+    preview_metadata: Mapping[str, Any],
+    unit_number: int | None,
+) -> int | None:
+    """Return the generated preview page for an XML transcript unit."""
+    if unit_number is None:
+        return None
+    for unit in preview_metadata.get("units", []):
+        if not isinstance(unit, Mapping):
+            continue
+        if parse_page_number(unit.get("unit_number")) != unit_number:
+            continue
+        return parse_page_number(
+            unit.get("preview_start_page") or unit.get("preview_page")
+        )
     return None
 
 
@@ -969,6 +1010,9 @@ def reference_locator(ref: Reference) -> tuple[str, str]:
     """Return a compact label/value for the sampled reference target."""
     if ref.file_type.lower() == "xlsx":
         return "Sheet", ref.chunk_name or "none"
+    if ref.file_type.lower() == "xml":
+        unit_label = str(ref.page_number) if ref.page_number is not None else "none"
+        return "Unit", unit_label
     page_label = str(ref.page_number) if ref.page_number is not None else "none"
     return "Page", page_label
 

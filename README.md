@@ -168,6 +168,10 @@ open XLSX sheet PDFs and XML transcript PDFs from Postgres:
 .venv/bin/python scripts/backfill_source_document_previews.py --all --apply
 ```
 
+XLSX preview generation uses LibreOffice headless (`soffice`) during the
+pipeline/backfill step to render formatted sheet PDFs. The preview UI only
+reads the generated PDF bytes from Postgres.
+
 ## Test Source Document Preview Links
 
 Open a local UI that samples one random chunk-backed source document link per

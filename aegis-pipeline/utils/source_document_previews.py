@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import io
 import re
+import shutil
+import subprocess
+import tempfile
 import textwrap
 import warnings
 import xml.etree.ElementTree as ET
@@ -15,15 +18,18 @@ from typing import Any
 PDF_MIME_TYPE = "application/pdf"
 XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 XML_MIME_TYPES = {"application/xml", "text/xml"}
-PREVIEW_RENDERER_VERSION = "source_document_preview_v1"
+PREVIEW_RENDERER_VERSION = "source_document_preview_v2"
 
 _SECTION_MD = "MANAGEMENT DISCUSSION SECTION"
 _SECTION_QA = "Q&A"
 _WHITESPACE_RE = re.compile(r"\s+")
-_XLSX_MAX_ROWS = 38
-_XLSX_MAX_COLUMNS = 9
-_CELL_MAX_CHARS = 24
 _PAGE_MARGIN = 42
+_SOFFICE_TIMEOUT_SECONDS = 180
+_SOFFICE_CANDIDATES = (
+    "soffice",
+    "libreoffice",
+    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
+)
 
 
 @dataclass(frozen=True)
@@ -96,6 +102,16 @@ class _TranscriptUnit:
     section_name: str
     speaker_block_ids: list[int]
     qa_group_id: int | None = None
+
+
+@dataclass(frozen=True)
+class _WorkbookSheet:
+    """One visible workbook sheet selected for preview rendering."""
+
+    sheet_number: int
+    name: str
+    is_chartsheet: bool
+    sheet_state: str
 
 
 def build_source_document_preview(
@@ -225,9 +241,43 @@ def _build_xlsx_preview(
     filename: str,
     metadata: dict[str, Any],
 ) -> SourceDocumentPreview:
+    workbook = _load_preview_workbook(original_bytes)
+    workbook_sheet_count = len(workbook.sheetnames)
+    visible_sheets = _visible_workbook_sheets(workbook)
+    try:
+        if not visible_sheets:
+            preview_bytes = _message_pdf(
+                title=filename,
+                lines=["Workbook has no visible sheets."],
+            )
+            sheet_records: list[dict[str, Any]] = []
+        else:
+            preview_bytes, sheet_records = _render_workbook_sheets_with_libreoffice(
+                workbook=workbook,
+                filename=filename,
+                visible_sheets=visible_sheets,
+            )
+    finally:
+        workbook.close()
+
+    return SourceDocumentPreview(
+        preview_mime_type=PDF_MIME_TYPE,
+        preview_bytes=preview_bytes,
+        preview_metadata={
+            **metadata,
+            "preview_kind": "libreoffice_sheet_pdf",
+            "page_model": "visible_sheet_pdf_page_ranges",
+            "render_engine": "libreoffice",
+            "sheets": sheet_records,
+            "visible_sheet_count": len(visible_sheets),
+            "workbook_sheet_count": workbook_sheet_count,
+        },
+    )
+
+
+def _load_preview_workbook(original_bytes: bytes) -> Any:
+    """Load an XLSX workbook while suppressing known metadata warnings."""
     from openpyxl import load_workbook
-    from reportlab.lib.pagesizes import landscape, letter
-    from reportlab.pdfgen import canvas
 
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -236,109 +286,184 @@ def _build_xlsx_preview(
             category=UserWarning,
             module="openpyxl.reader.workbook",
         )
-        workbook = load_workbook(
+        return load_workbook(
             io.BytesIO(original_bytes),
-            data_only=True,
-            read_only=True,
+            data_only=False,
+            read_only=False,
         )
-    workbook_sheet_count = len(workbook.sheetnames)
-    page_size = landscape(letter)
-    buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=page_size, pageCompression=1)
-    pdf.setTitle(f"{filename} preview")
 
-    sheets: list[dict[str, Any]] = []
-    preview_page = 1
-    try:
-        for sheet_number, sheet_name in enumerate(workbook.sheetnames, start=1):
-            worksheet = workbook[sheet_name]
-            if getattr(worksheet, "sheet_state", "visible") != "visible":
-                continue
-            is_chartsheet = not hasattr(worksheet, "iter_rows")
-            rows, row_count, column_count = _worksheet_preview_rows(worksheet)
-            truncated_rows = row_count > _XLSX_MAX_ROWS
-            truncated_columns = column_count > _XLSX_MAX_COLUMNS
-            _draw_sheet_page(
-                pdf,
-                page_size=page_size,
-                filename=filename,
-                sheet_name=str(worksheet.title),
+
+def _visible_workbook_sheets(workbook: Any) -> list[_WorkbookSheet]:
+    """Return visible sheets in workbook order, matching extraction numbering."""
+    visible_sheets: list[_WorkbookSheet] = []
+    for sheet_number, sheet_name in enumerate(workbook.sheetnames, start=1):
+        sheet = workbook[sheet_name]
+        sheet_state = str(getattr(sheet, "sheet_state", "visible"))
+        if sheet_state != "visible":
+            continue
+        visible_sheets.append(
+            _WorkbookSheet(
                 sheet_number=sheet_number,
-                preview_page=preview_page,
-                rows=rows,
-                row_count=row_count,
-                column_count=column_count,
-                truncated_rows=truncated_rows,
-                truncated_columns=truncated_columns,
+                name=str(sheet.title),
+                is_chartsheet=not hasattr(sheet, "iter_rows"),
+                sheet_state=sheet_state,
             )
-            sheets.append(
-                {
-                    "name": str(worksheet.title),
-                    "sheet_number": sheet_number,
-                    "preview_page": preview_page,
-                    "is_chartsheet": is_chartsheet,
-                    "row_count": row_count,
-                    "column_count": column_count,
-                    "truncated_rows": truncated_rows,
-                    "truncated_columns": truncated_columns,
-                }
-            )
-            preview_page += 1
+        )
+    return visible_sheets
 
-        if not sheets:
-            _draw_message_page(
-                pdf,
-                page_size=page_size,
-                title=filename,
-                lines=["Workbook has no visible sheets."],
-            )
-    finally:
-        workbook.close()
 
-    pdf.save()
-    return SourceDocumentPreview(
-        preview_mime_type=PDF_MIME_TYPE,
-        preview_bytes=buffer.getvalue(),
-        preview_metadata={
-            **metadata,
-            "preview_kind": "sheet_pdf",
-            "page_model": "one_visible_sheet_per_preview_page",
-            "sheets": sheets,
-            "visible_sheet_count": len(sheets),
-            "workbook_sheet_count": workbook_sheet_count,
-        },
+def _render_workbook_sheets_with_libreoffice(
+    *,
+    workbook: Any,
+    filename: str,
+    visible_sheets: list[_WorkbookSheet],
+) -> tuple[bytes, list[dict[str, Any]]]:
+    """Render each visible sheet through LibreOffice and merge page ranges."""
+    soffice = _resolve_soffice()
+    pdf_parts: list[tuple[_WorkbookSheet, Path]] = []
+    suffix = Path(filename).suffix or ".xlsx"
+    with tempfile.TemporaryDirectory(prefix="aegis-xlsx-preview-") as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        output_dir = temp_dir / "pdf"
+        output_dir.mkdir()
+        profile_dir = temp_dir / "lo-profile"
+        profile_dir.mkdir()
+
+        for sheet in visible_sheets:
+            workbook_path = temp_dir / f"sheet_{sheet.sheet_number:03d}{suffix}"
+            _save_single_visible_sheet_workbook(workbook, sheet, workbook_path)
+            pdf_path = _convert_xlsx_file_to_pdf(
+                soffice=soffice,
+                input_path=workbook_path,
+                output_dir=output_dir,
+                profile_dir=profile_dir,
+            )
+            pdf_parts.append((sheet, pdf_path))
+
+        return _merge_sheet_pdfs(pdf_parts)
+
+
+def _save_single_visible_sheet_workbook(
+    workbook: Any,
+    target_sheet: _WorkbookSheet,
+    output_path: Path,
+) -> None:
+    """Save a temporary workbook with exactly one visible sheet."""
+    for sheet_name in workbook.sheetnames:
+        sheet = workbook[sheet_name]
+        sheet.sheet_state = "visible" if sheet_name == target_sheet.name else "hidden"
+    _set_active_sheet(workbook, target_sheet.name)
+    workbook.save(output_path)
+
+
+def _set_active_sheet(workbook: Any, sheet_name: str) -> None:
+    """Best-effort active sheet selection for LibreOffice exports."""
+    try:
+        workbook.active = workbook.sheetnames.index(sheet_name)
+    except Exception:
+        return
+
+
+def _convert_xlsx_file_to_pdf(
+    *,
+    soffice: str,
+    input_path: Path,
+    output_dir: Path,
+    profile_dir: Path,
+) -> Path:
+    """Convert one temporary XLSX file to PDF with LibreOffice."""
+    command = [
+        soffice,
+        "--headless",
+        "--nologo",
+        "--nofirststartwizard",
+        f"-env:UserInstallation={profile_dir.as_uri()}",
+        "--convert-to",
+        "pdf:calc_pdf_Export",
+        "--outdir",
+        str(output_dir),
+        str(input_path),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=_SOFFICE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"LibreOffice PDF conversion timed out for {input_path.name}."
+        ) from exc
+
+    output_path = output_dir / input_path.with_suffix(".pdf").name
+    if result.returncode != 0 or not output_path.is_file():
+        detail = result.stderr.strip() or result.stdout.strip() or "no output"
+        raise RuntimeError(
+            "LibreOffice failed to convert XLSX preview sheet "
+            f"{input_path.name}: {detail}"
+        )
+    return output_path
+
+
+def _resolve_soffice() -> str:
+    """Return a LibreOffice executable path for XLSX preview rendering."""
+    for candidate in _SOFFICE_CANDIDATES:
+        resolved = shutil.which(candidate) if "/" not in candidate else candidate
+        if resolved and Path(resolved).is_file():
+            return resolved
+    raise RuntimeError(
+        "XLSX preview generation requires LibreOffice/soffice. Install "
+        "LibreOffice or add soffice to PATH before running preview backfill."
     )
 
 
-def _worksheet_preview_rows(worksheet: Any) -> tuple[list[list[str]], int, int]:
-    if not hasattr(worksheet, "iter_rows"):
-        return [], 0, 0
-    row_count = int(getattr(worksheet, "max_row", 0) or 0)
-    column_count = int(getattr(worksheet, "max_column", 0) or 0)
-    max_rows = min(row_count, _XLSX_MAX_ROWS)
-    max_columns = min(column_count, _XLSX_MAX_COLUMNS)
-    rows: list[list[str]] = []
-    if max_rows <= 0 or max_columns <= 0:
-        return rows, row_count, column_count
-    for row in worksheet.iter_rows(
-        min_row=1,
-        max_row=max_rows,
-        min_col=1,
-        max_col=max_columns,
-        values_only=True,
-    ):
-        rows.append([_cell_text(value) for value in row])
-    return rows, row_count, column_count
+def _merge_sheet_pdfs(
+    pdf_parts: list[tuple[_WorkbookSheet, Path]],
+) -> tuple[bytes, list[dict[str, Any]]]:
+    """Merge rendered sheet PDFs and return sheet-to-page metadata."""
+    PdfReader, PdfWriter = _load_pypdf_classes()
+    writer = PdfWriter()
+    sheet_records: list[dict[str, Any]] = []
+    merged_page_count = 0
+    for sheet, pdf_path in pdf_parts:
+        reader = PdfReader(str(pdf_path))
+        page_count = len(reader.pages)
+        if page_count < 1:
+            raise RuntimeError(f"LibreOffice produced empty PDF: {pdf_path}")
+        start_page = merged_page_count + 1
+        for page in reader.pages:
+            writer.add_page(page)
+        merged_page_count += page_count
+        end_page = merged_page_count
+        sheet_records.append(
+            {
+                "name": sheet.name,
+                "sheet_number": sheet.sheet_number,
+                "preview_page": start_page,
+                "preview_start_page": start_page,
+                "preview_end_page": end_page,
+                "preview_page_count": end_page - start_page + 1,
+                "is_chartsheet": sheet.is_chartsheet,
+                "sheet_state": sheet.sheet_state,
+            }
+        )
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue(), sheet_records
 
 
-def _cell_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, float):
-        text = f"{value:.6g}"
-    else:
-        text = str(value)
-    return _clip(_clean_text(text), _CELL_MAX_CHARS)
+def _load_pypdf_classes() -> tuple[Any, Any]:
+    try:
+        from pypdf import PdfReader, PdfWriter
+
+        return PdfReader, PdfWriter
+    except ImportError as exc:
+        raise RuntimeError(
+            "PDF preview merging requires pypdf. Install requirements-workstation.txt."
+        ) from exc
 
 
 def _build_xml_transcript_preview(
@@ -359,24 +484,30 @@ def _build_xml_transcript_preview(
     pdf = canvas.Canvas(buffer, pagesize=letter, pageCompression=1)
     pdf.setTitle(f"{filename} preview")
     unit_metadata: list[dict[str, Any]] = []
+    next_page_number = 1
     for unit in units:
-        truncated = _draw_transcript_page(
+        start_page = next_page_number
+        next_page_number = _draw_transcript_unit_pages(
             pdf,
             page_size=letter,
             filename=filename,
             document=document,
             unit=unit,
+            start_page=start_page,
         )
+        end_page = next_page_number - 1
         unit_metadata.append(
             {
                 "unit_number": unit.unit_number,
-                "preview_page": unit.unit_number,
+                "preview_page": start_page,
+                "preview_start_page": start_page,
+                "preview_end_page": end_page,
+                "preview_page_count": end_page - start_page + 1,
                 "title": unit.title,
                 "unit_type": unit.unit_type,
                 "section_name": unit.section_name,
                 "speaker_block_ids": unit.speaker_block_ids,
                 "qa_group_id": unit.qa_group_id,
-                "truncated": truncated,
             }
         )
     pdf.save()
@@ -385,103 +516,176 @@ def _build_xml_transcript_preview(
         preview_bytes=buffer.getvalue(),
         preview_metadata={
             **metadata,
-            "preview_kind": "transcript_pdf",
-            "page_model": "one_transcript_unit_per_preview_page",
+            "preview_kind": "styled_transcript_pdf",
+            "page_model": "transcript_unit_pdf_page_ranges",
             "transcript_title": document.title,
             "transcript_date": document.transcript_date,
             "unit_count": len(units),
+            "preview_page_count": next_page_number - 1,
             "units": unit_metadata,
         },
     )
 
 
-def _draw_sheet_page(
-    pdf: Any,
-    *,
-    page_size: tuple[float, float],
-    filename: str,
-    sheet_name: str,
-    sheet_number: int,
-    preview_page: int,
-    rows: list[list[str]],
-    row_count: int,
-    column_count: int,
-    truncated_rows: bool,
-    truncated_columns: bool,
-) -> None:
-    width, height = page_size
-    title = f"{sheet_name}"
-    subtitle = (
-        f"{filename} | sheet {sheet_number} | preview page {preview_page} | "
-        f"{row_count} rows x {column_count} columns"
+def _message_pdf(*, title: str, lines: list[str]) -> bytes:
+    """Return a simple one-page PDF message."""
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=letter, pageCompression=1)
+    _draw_message_page(
+        pdf,
+        page_size=letter,
+        title=title,
+        lines=lines,
     )
-    pdf.setFillColorRGB(1, 1, 1)
-    pdf.rect(0, 0, width, height, fill=1, stroke=0)
-    y = _draw_page_title(pdf, width, height, title, subtitle)
-    lines = _sheet_lines(rows)
-    if truncated_rows or truncated_columns:
-        lines.append("")
-        lines.append(
-            "Preview truncated to keep each workbook sheet on one reference page."
-        )
-    _draw_monospace_lines(pdf, lines, x=_PAGE_MARGIN, y=y, width=width)
-    _draw_footer(pdf, width, preview_page)
-    pdf.showPage()
+    pdf.save()
+    return buffer.getvalue()
 
 
-def _sheet_lines(rows: list[list[str]]) -> list[str]:
-    if not rows:
-        return ["Sheet contains no cell values in the detected used range."]
-    column_count = max((len(row) for row in rows), default=0)
-    header = ["row", *(_excel_column_name(index) for index in range(1, column_count + 1))]
-    lines = [_format_sheet_row(header)]
-    for row_index, row in enumerate(rows, start=1):
-        lines.append(_format_sheet_row([str(row_index), *row]))
-    return lines
-
-
-def _format_sheet_row(cells: list[str]) -> str:
-    widths = [5, *([_CELL_MAX_CHARS] * max(0, len(cells) - 1))]
-    padded = [
-        _clip(cell, widths[index]).ljust(widths[index])
-        for index, cell in enumerate(cells)
-    ]
-    return " | ".join(padded).rstrip()
-
-
-def _draw_transcript_page(
+def _draw_transcript_unit_pages(
     pdf: Any,
     *,
     page_size: tuple[float, float],
     filename: str,
     document: _TranscriptDocument,
     unit: _TranscriptUnit,
-) -> bool:
+    start_page: int,
+) -> int:
+    """Draw a full transcript unit and return the next available page number."""
+    width, height = page_size
+    page_number = start_page
+    y = _draw_transcript_page_header(
+        pdf,
+        page_size=page_size,
+        filename=filename,
+        document=document,
+        unit=unit,
+        page_number=page_number,
+        continued=False,
+    )
+    max_chars = 96
+    for kind, text in _markdown_blocks(unit.markdown):
+        spacing_before, spacing_after, line_height = _text_style_spacing(kind)
+        if kind == "blank":
+            y -= spacing_after
+            continue
+        if y < _PAGE_MARGIN + spacing_before + line_height:
+            _draw_footer(pdf, width, page_number)
+            pdf.showPage()
+            page_number += 1
+            y = _draw_transcript_page_header(
+                pdf,
+                page_size=page_size,
+                filename=filename,
+                document=document,
+                unit=unit,
+                page_number=page_number,
+                continued=True,
+            )
+        y -= spacing_before
+        for line in textwrap.wrap(text, width=max_chars) or [""]:
+            if y < _PAGE_MARGIN + line_height:
+                _draw_footer(pdf, width, page_number)
+                pdf.showPage()
+                page_number += 1
+                y = _draw_transcript_page_header(
+                    pdf,
+                    page_size=page_size,
+                    filename=filename,
+                    document=document,
+                    unit=unit,
+                    page_number=page_number,
+                    continued=True,
+                )
+            _draw_text_line(pdf, kind, line, _PAGE_MARGIN, y)
+            y -= line_height
+        y -= spacing_after
+
+    _draw_footer(pdf, width, page_number)
+    pdf.showPage()
+    return page_number + 1
+
+
+def _draw_transcript_page_header(
+    pdf: Any,
+    *,
+    page_size: tuple[float, float],
+    filename: str,
+    document: _TranscriptDocument,
+    unit: _TranscriptUnit,
+    page_number: int,
+    continued: bool,
+) -> float:
     width, height = page_size
     subtitle_parts = [filename]
     if document.transcript_date:
         subtitle_parts.append(document.transcript_date)
-    subtitle_parts.append(f"unit/page {unit.unit_number}")
+    subtitle_parts.append(f"unit {unit.unit_number}")
+    subtitle_parts.append(f"preview page {page_number}")
+    title = unit.title + (" (continued)" if continued else "")
     pdf.setFillColorRGB(1, 1, 1)
     pdf.rect(0, 0, width, height, fill=1, stroke=0)
-    y = _draw_page_title(
-        pdf,
-        width,
-        height,
-        unit.title,
-        " | ".join(subtitle_parts),
+    return _draw_page_title(pdf, width, height, title, " | ".join(subtitle_parts))
+
+
+def _markdown_blocks(markdown: str) -> list[tuple[str, str]]:
+    """Return styled transcript blocks without markdown control characters."""
+    blocks: list[tuple[str, str]] = []
+    for raw_line in markdown.splitlines():
+        line = raw_line.strip()
+        if not line:
+            blocks.append(("blank", ""))
+            continue
+        if line.startswith("## "):
+            blocks.append(("h2", _clean_text(line[3:])))
+            continue
+        if line.startswith("# "):
+            blocks.append(("h1", _clean_text(line[2:])))
+            continue
+        if _is_transcript_metadata_line(line):
+            blocks.append(("meta", _clean_text(line)))
+            continue
+        blocks.append(("body", _clean_text(line)))
+    return blocks
+
+
+def _is_transcript_metadata_line(line: str) -> bool:
+    prefixes = (
+        "Section:",
+        "Speaker:",
+        "Speaker block ID:",
+        "Q&A group ID:",
+        "Speaker block IDs:",
     )
-    lines = _wrapped_markdown_lines(unit.markdown, max_chars=96)
-    line_height = 10.8
-    max_lines = max(1, int((y - 52) // line_height))
-    truncated = len(lines) > max_lines
-    visible_lines = lines[:max_lines]
-    if truncated and visible_lines:
-        visible_lines[-1] = "Preview text truncated to keep one transcript unit per page."
-    _draw_text_lines(pdf, visible_lines, x=_PAGE_MARGIN, y=y, line_height=line_height)
-    _draw_footer(pdf, width, unit.unit_number)
-    pdf.showPage()
-    return truncated
+    return line.startswith(prefixes)
+
+
+def _text_style_spacing(kind: str) -> tuple[float, float, float]:
+    if kind == "h1":
+        return 2, 7, 15
+    if kind == "h2":
+        return 8, 5, 12.5
+    if kind == "meta":
+        return 1, 2, 10
+    return 2, 6, 11.5
+
+
+def _draw_text_line(pdf: Any, kind: str, text: str, x: float, y: float) -> None:
+    if kind == "h1":
+        pdf.setFillColorRGB(0.1, 0.13, 0.18)
+        pdf.setFont("Helvetica-Bold", 13)
+    elif kind == "h2":
+        pdf.setFillColorRGB(0.12, 0.22, 0.32)
+        pdf.setFont("Helvetica-Bold", 10.5)
+    elif kind == "meta":
+        pdf.setFillColorRGB(0.36, 0.42, 0.5)
+        pdf.setFont("Helvetica", 8.5)
+    else:
+        pdf.setFillColorRGB(0.1, 0.13, 0.18)
+        pdf.setFont("Helvetica", 9)
+    pdf.drawString(x, y, _pdf_text(text))
 
 
 def _draw_message_page(
@@ -520,25 +724,6 @@ def _draw_page_title(
     return height - _PAGE_MARGIN - 42
 
 
-def _draw_monospace_lines(
-    pdf: Any,
-    lines: list[str],
-    *,
-    x: float,
-    y: float,
-    width: float,
-) -> None:
-    pdf.setFillColorRGB(0.1, 0.13, 0.18)
-    pdf.setFont("Courier", 7.1)
-    line_height = 9
-    max_chars = max(20, int((width - (2 * _PAGE_MARGIN)) / 4.35))
-    for line in lines:
-        if y < 34:
-            break
-        pdf.drawString(x, y, _pdf_text(_clip(line, max_chars)))
-        y -= line_height
-
-
 def _draw_text_lines(
     pdf: Any,
     lines: list[str],
@@ -560,17 +745,6 @@ def _draw_footer(pdf: Any, width: float, page_number: int) -> None:
     pdf.setFillColorRGB(0.45, 0.5, 0.57)
     pdf.setFont("Helvetica", 8)
     pdf.drawRightString(width - _PAGE_MARGIN, 24, f"Preview page {page_number}")
-
-
-def _wrapped_markdown_lines(text: str, *, max_chars: int) -> list[str]:
-    lines: list[str] = []
-    for raw_line in text.splitlines():
-        line = _clean_text(raw_line)
-        if not line:
-            lines.append("")
-            continue
-        lines.extend(textwrap.wrap(line, width=max_chars) or [""])
-    return lines
 
 
 def _parse_factset_transcript(original_bytes: bytes) -> _TranscriptDocument:
@@ -852,14 +1026,6 @@ def _element_text(element: ET.Element | None) -> str:
 
 def _clean_text(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", text or "").strip()
-
-
-def _excel_column_name(index: int) -> str:
-    name = ""
-    while index:
-        index, remainder = divmod(index - 1, 26)
-        name = chr(65 + remainder) + name
-    return name
 
 
 def _clip(text: str, max_chars: int) -> str:
