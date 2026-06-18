@@ -427,9 +427,11 @@ def _merge_sheet_pdfs(
     PdfReader, PdfWriter = _load_pypdf_classes()
     writer = PdfWriter()
     sheet_records: list[dict[str, Any]] = []
+    readers: list[Any] = []
     merged_page_count = 0
     for sheet, pdf_path in pdf_parts:
-        reader = PdfReader(str(pdf_path))
+        reader = PdfReader(io.BytesIO(pdf_path.read_bytes()))
+        readers.append(reader)
         page_count = len(reader.pages)
         if page_count < 1:
             raise RuntimeError(f"LibreOffice produced empty PDF: {pdf_path}")
