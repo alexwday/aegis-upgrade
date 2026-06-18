@@ -111,16 +111,15 @@ Run all sources:
 Valid source keys are `investor_slides`, `supplementary_financials`, `rts`,
 `pillar3`, `transcripts`, and `event_transcripts`.
 
-Finalized outputs are written under each source folder:
+Finalization syncs the source retrieval tables, embeddings tables, and source
+document byte table directly in PostgreSQL. The local master folder keeps only
+the compact manifest checkpoint used for future diffs:
 
 ```text
-aegis-pipeline/sources/<source>/data-output/master/master-data.csv
-aegis-pipeline/sources/<source>/data-output/master/master-embeddings.csv
 aegis-pipeline/sources/<source>/data-output/master/master-manifest.json
-aegis-pipeline/sources/<source>/data-output/master/upload/
 ```
 
-## PostgreSQL Load
+## PostgreSQL Setup
 
 Create the public tables once from the project root:
 
@@ -128,14 +127,17 @@ Create the public tables once from the project root:
 .venv/bin/python scripts/create_retrieval_tables.py --source investor_slides --apply
 ```
 
-Refresh tables from the current finalized CSV snapshot:
+## One-Time CSV Migration
+
+If a workstation has old finalized CSV snapshots, migrate each source once:
 
 ```bash
-.venv/bin/python scripts/load_retrieval_master_csvs.py --source investor_slides --apply
+.venv/bin/python scripts/migrate_retrieval_csvs_to_postgres.py --source investor_slides --apply
 ```
 
-The load script validates both CSVs, stages them in temporary tables, truncates
-the targets, and inserts the new snapshot in one transaction.
+The migration validates both CSVs, refreshes the Postgres retrieval tables,
+backfills source document bytes, and rewrites `master-manifest.json` in the new
+Postgres-native format.
 
 ## Validation
 

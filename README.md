@@ -93,11 +93,11 @@ Create missing tables from `aegis-table-schemas/`:
 .venv/bin/python scripts/db_setup.py --apply
 ```
 
-Create or refresh a source retrieval table pair directly:
+Create a source retrieval table pair directly when you do not want to run the
+full schema directory setup:
 
 ```bash
 .venv/bin/python scripts/create_retrieval_tables.py --source investor_slides --apply
-.venv/bin/python scripts/load_retrieval_master_csvs.py --source investor_slides --apply
 ```
 
 Upsert the canonical prompt archive into `public.prompts`:
@@ -127,21 +127,23 @@ The Q2 folders are already present for:
 BMO-CA, BNS-CA, CM-CA, NA-CA, RY-CA, TD-CA
 ```
 
-## Run Pipelines And Load Postgres
+## One-Time CSV Migration
 
-Run one source and load its finalized CSVs:
-
-```bash
-.venv/bin/python scripts/run_pipeline.py --source investor_slides --load
-```
-
-Run all sources:
+If this workstation has old `master-data.csv` / `master-embeddings.csv`
+outputs, migrate each source once before relying on incremental pipeline runs:
 
 ```bash
-.venv/bin/python scripts/run_pipeline.py --all --load
+.venv/bin/python scripts/migrate_retrieval_csvs_to_postgres.py --source investor_slides --apply
 ```
 
-After loading source tables, refresh the agent availability preflight table:
+## Run Pipelines
+
+```bash
+.venv/bin/python scripts/run_pipeline.py --source investor_slides
+.venv/bin/python scripts/run_pipeline.py --all
+```
+
+After syncing source tables, refresh the agent availability preflight table:
 
 ```bash
 .venv/bin/python scripts/db_setup.py --refresh-availability

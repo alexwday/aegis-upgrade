@@ -29,7 +29,6 @@ from utils.config_setup import (
 from utils.logging_setup import get_stage_logger
 
 DATA_SOURCE = DEFAULT_DATA_SOURCE
-MASTER_DATA_FILE_NAME = "master-data.csv"
 MASTER_MANIFEST_FILE_NAME = "master-manifest.json"
 FILES_TO_PROCESS_FILE_NAME = "files_to_process.json"
 FILES_TO_REMOVE_FILE_NAME = "files_to_remove.json"
@@ -100,10 +99,8 @@ class MasterFileStatus:
 
     output_base_path: Path
     output_base_path_exists: bool
-    master_data_path: Path
     master_manifest_path: Path
     master_files_exist: bool
-    missing_master_files: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -284,56 +281,27 @@ def release_pipeline_lock(pipeline_lock: PipelineLock) -> None:
 
 
 def check_master_files(output_base_path: Path | None = None) -> MasterFileStatus:
-    """Check whether the persisted master output files are complete.
+    """Check whether the persisted master manifest is available.
 
-    The expected layout is output_base_path/master-data.csv and
-    output_base_path/master-manifest.json, where output_base_path already points
-    to the configured master folder. Both files must exist together. If exactly
-    one exists, this function raises because the persisted state is incomplete
-    and should not be loaded by downstream stages.
+    ``master-manifest.json`` is the checkpoint used for diffing direct
+    PostgreSQL finalization runs.
     """
     base_path = _resolve_output_base_path(output_base_path)
-    master_data_path = base_path / MASTER_DATA_FILE_NAME
     master_manifest_path = base_path / MASTER_MANIFEST_FILE_NAME
 
     if base_path.exists() and not base_path.is_dir():
         raise ManifestStateError(f"Output base path is not a folder: {base_path}")
 
-    for path in (master_data_path, master_manifest_path):
-        if path.exists() and not path.is_file():
-            raise ManifestStateError(f"Master artifact is not a file: {path}")
-
-    master_data_exists = master_data_path.is_file()
-    master_manifest_exists = master_manifest_path.is_file()
-    if master_data_exists != master_manifest_exists:
-        found = (
-            MASTER_DATA_FILE_NAME if master_data_exists else MASTER_MANIFEST_FILE_NAME
-        )
-        missing = (
-            MASTER_MANIFEST_FILE_NAME if master_data_exists else MASTER_DATA_FILE_NAME
-        )
+    if master_manifest_path.exists() and not master_manifest_path.is_file():
         raise ManifestStateError(
-            "Incomplete persisted master state: expected both "
-            f"{MASTER_DATA_FILE_NAME} and {MASTER_MANIFEST_FILE_NAME}; found only "
-            f"{found}. Missing {missing}."
+            f"Master artifact is not a file: {master_manifest_path}"
         )
-
-    missing_master_files = tuple(
-        name
-        for name, exists in (
-            (MASTER_DATA_FILE_NAME, master_data_exists),
-            (MASTER_MANIFEST_FILE_NAME, master_manifest_exists),
-        )
-        if not exists
-    )
 
     return MasterFileStatus(
         output_base_path=base_path,
         output_base_path_exists=base_path.is_dir(),
-        master_data_path=master_data_path,
         master_manifest_path=master_manifest_path,
-        master_files_exist=master_data_exists and master_manifest_exists,
-        missing_master_files=missing_master_files,
+        master_files_exist=master_manifest_path.is_file(),
     )
 
 
@@ -399,9 +367,9 @@ def build_input_manifest(
 def load_master_manifest(manifest_path: Path) -> tuple[ManifestRecord, ...]:
     """Load persisted manifest records from the master manifest JSON file.
 
-    The current on-disk format is JSON. The file may either contain a list of
-    manifest records or an object with a files list. An empty file is treated as
-    an empty manifest so initial blank master files can be introduced later.
+    The current on-disk format is a JSON object with ``storage_target`` set to
+    ``postgres`` and a ``files`` list. Empty files are treated as empty
+    manifests so initial blank master files can be introduced later.
     """
     if not manifest_path.exists():
         return ()
@@ -417,14 +385,17 @@ def load_master_manifest(manifest_path: Path) -> tuple[ManifestRecord, ...]:
             f"Invalid JSON in master manifest: {manifest_path}"
         ) from exc
 
-    if isinstance(parsed, list):
-        rows = parsed
-    elif isinstance(parsed, dict) and isinstance(parsed.get("files"), list):
-        rows = parsed["files"]
-    else:
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("files"), list):
         raise ManifestStateError(
-            "master-manifest.json must be a JSON list or an object with a files list"
+            "master-manifest.json must be a Postgres manifest object with a files list"
         )
+    if parsed.get("storage_target") != "postgres":
+        raise ManifestStateError(
+            "master-manifest.json predates direct PostgreSQL finalization. "
+            "Run scripts/migrate_retrieval_csvs_to_postgres.py for this source "
+            "before running the pipeline."
+        )
+    rows = parsed["files"]
 
     return tuple(
         sorted(

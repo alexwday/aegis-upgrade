@@ -1,20 +1,14 @@
-"""Finalize master retrieval CSV and manifest outputs.
+"""Finalize source retrieval outputs into PostgreSQL.
 
-This stage is intentionally local and deterministic. It reads the manifest
-progress files plus per-workbook embedding artifacts, applies removals and
-additions against the current master outputs, validates that every manifest
-record has matching data rows, and writes current master files plus a
-timestamped upload CSV for the external PostgreSQL upload process. After those
-outputs are written, it archives the run progress folder and resets it for the
-next run.
+This stage reads manifest progress files plus per-file embedding artifacts,
+applies removals and additions directly to the public PostgreSQL retrieval
+tables, refreshes source document bytes, writes a compact master manifest
+checkpoint, archives the run progress folder, and resets it for the next run.
 """
 
 from __future__ import annotations
 
-import csv
-import io
 import json
-import re
 import shutil
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -25,11 +19,11 @@ from typing import Any
 
 from utils.config_setup import (
     REPO_ROOT,
-    get_master_data_table_name,
     get_output_source_config,
     load_config,
 )
 from utils.logging_setup import get_stage_logger
+from utils.retrieval_postgres import SOURCE_DOCUMENTS_TABLE, sync_retrieval_source
 from .embeddings import (
     CONTENT_ROWS_JSONL_FILE_NAME,
     EMBEDDING_INDEX_JSONL_FILE_NAME,
@@ -41,19 +35,16 @@ from .manifest import (
     FILES_TO_PROCESS_FILE_NAME,
     FILES_TO_REMOVE_FILE_NAME,
     MANIFEST_FIELDS,
-    MASTER_DATA_FILE_NAME,
     PROGRESS_DIR,
     ManifestRecord,
     check_master_files,
     load_master_manifest,
 )
 
-UPLOAD_DIR_NAME = "upload"
 UPLOAD_FILE_PREFIX = "aegis-pillar3-data"
 UPLOAD_EMBEDDINGS_FILE_PREFIX = "aegis-pillar3-embeddings"
 ARCHIVE_DIR_NAME = "archive"
 PROGRESS_ARCHIVE_PREFIX = "progress"
-MASTER_EMBEDDINGS_FILE_NAME = "master-embeddings.csv"
 MASTER_DATA_FIELDS = (
     "source_type",
     "fiscal_year",
@@ -130,11 +121,6 @@ class FinalizeStageResult:
     """Summary returned after writing master outputs and archiving progress."""
 
     output_base_path: Path
-    upload_dir: Path
-    master_data_path: Path
-    master_embeddings_path: Path
-    upload_data_path: Path | None
-    upload_embeddings_path: Path | None
     master_manifest_path: Path
     progress_archive_path: Path
     table_name: str
@@ -152,7 +138,7 @@ def run_finalize_stage(
     generated_at: str | None = None,
     progress_archive_dir: Path | None = None,
 ) -> FinalizeStageResult:
-    """Create current master files, upload CSVs, and progress archive.
+    """Sync finalized retrieval rows to PostgreSQL and archive progress.
 
     Args:
         progress_dir: Folder containing manifest progress and embedding
@@ -170,20 +156,18 @@ def run_finalize_stage(
 
     Returns:
         FinalizeStageResult with output paths, archive path, and row/file counts.
-        ``upload_data_path`` is None when no manifest changes were present and
-        no upload CSV was created.
 
     Raises:
-        FinalizeStageError: If progress files, embedding artifacts, or master
-            data/manifest sync checks fail, or progress cleanup cannot complete.
+        FinalizeStageError: If progress files, embedding artifacts, PostgreSQL
+            sync, or progress cleanup cannot complete.
         NotImplementedError: If output is configured for NAS rather than a local
             path. NAS writes should be added through the connector once the
             side effects are explicitly approved.
 
     External side effects:
-        Writes local master data and embedding files under the configured output
-        base path when changes exist, writes a zip archive under the resolved
-        archive folder, and resets ``progress_dir``.
+        Applies changed rows directly to PostgreSQL, writes a compact
+        ``master-manifest.json`` checkpoint, writes a zip archive under the
+        resolved archive folder, and resets ``progress_dir``.
     """
     logger = get_stage_logger(__name__, "FINALIZE")
     load_config()
@@ -197,95 +181,52 @@ def run_finalize_stage(
         if status.master_files_exist
         else ()
     )
-    existing_rows = (
-        _read_master_data_csv(status.master_data_path)
-        if status.master_files_exist
-        else []
-    )
-    master_embeddings_path = status.output_base_path / MASTER_EMBEDDINGS_FILE_NAME
-    existing_embedding_rows = _read_master_embeddings_csv(master_embeddings_path)
     files_to_process = _load_process_records(progress_dir)
     files_to_remove = _load_removal_records(progress_dir)
 
     logger.info(
-        "Finalizing master outputs: existing_files=%d existing_rows=%d "
-        "process=%d remove=%d table=%s",
+        "Finalizing PostgreSQL outputs: existing_files=%d process=%d "
+        "remove=%d table=%s",
         len(existing_records),
-        len(existing_rows),
         len(files_to_process),
         len(files_to_remove),
         resolved_table_name,
     )
 
-    master_data_path = status.master_data_path
     master_manifest_path = status.master_manifest_path
-    upload_dir = status.output_base_path / UPLOAD_DIR_NAME
 
-    if not files_to_process and not files_to_remove:
-        _validate_unique_manifest_records(existing_records, "existing master manifest")
-        _validate_master_sync(existing_rows, existing_records)
-        if existing_embedding_rows:
-            _validate_master_embeddings_sync(existing_embedding_rows, existing_records)
-        progress_archive_path = _archive_and_reset_progress(
+    manifest_records, processed_rows, processed_embedding_rows, replace_file_ids = (
+        _build_postgres_sync_state(
+            existing_records=existing_records,
+            process_records=files_to_process,
+            removal_records=files_to_remove,
             progress_dir=progress_dir,
-            generated_at=generated_at,
-            archive_dir=progress_archive_dir,
         )
-        logger.info(
-            "Finalize complete with no manifest changes: files=%d rows=%d "
-            "progress_archive=%s",
-            len(existing_records),
-            len(existing_rows),
-            progress_archive_path,
-        )
-        return FinalizeStageResult(
-            output_base_path=status.output_base_path,
-            upload_dir=upload_dir,
-            master_data_path=master_data_path,
-            master_embeddings_path=master_embeddings_path,
-            upload_data_path=None,
-            upload_embeddings_path=None,
-            master_manifest_path=master_manifest_path,
-            progress_archive_path=progress_archive_path,
-            table_name=resolved_table_name,
-            processed_file_count=0,
-            removed_file_count=0,
-            manifest_file_count=len(existing_records),
-            master_row_count=len(existing_rows),
-            master_embedding_row_count=len(existing_embedding_rows),
-        )
-
-    manifest_records, master_rows, master_embedding_rows = _merge_master_state(
-        existing_records=existing_records,
-        existing_rows=existing_rows,
-        existing_embedding_rows=existing_embedding_rows,
-        process_records=files_to_process,
-        removal_records=files_to_remove,
-        progress_dir=progress_dir,
+    )
+    sync_result = sync_retrieval_source(
+        data_table_name=UPLOAD_FILE_PREFIX,
+        embeddings_table_name=UPLOAD_EMBEDDINGS_FILE_PREFIX,
+        records=manifest_records,
+        replace_file_ids=replace_file_ids,
+        processed_rows=processed_rows,
+        processed_embedding_rows=processed_embedding_rows,
+        data_fields=MASTER_DATA_FIELDS,
+        data_embedding_fields=MASTER_EMBEDDING_FIELDS,
+        embeddings_fields=MASTER_EMBEDDINGS_FIELDS,
+        embeddings_vector_fields=MASTER_EMBEDDINGS_VECTOR_FIELDS,
     )
     manifest_payload = _master_manifest_payload(
         generated_at=generated_at,
         table_name=resolved_table_name,
         output_base_path=status.output_base_path,
         manifest_records=manifest_records,
-        master_rows=master_rows,
-        master_embedding_rows=master_embedding_rows,
+        master_rows=processed_rows,
+        master_embedding_rows=processed_embedding_rows,
+        row_counts=sync_result.row_counts,
+        embedding_row_count=sync_result.master_embedding_row_count,
     )
 
     status.output_base_path.mkdir(parents=True, exist_ok=True)
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    upload_data_path = upload_dir / _upload_file_name(generated_at)
-    upload_embeddings_path = upload_dir / _upload_embeddings_file_name(generated_at)
-
-    for data_path in (master_data_path, upload_data_path):
-        _write_csv(data_path, master_rows, MASTER_DATA_FIELDS, MASTER_EMBEDDING_FIELDS)
-    for embeddings_path in (master_embeddings_path, upload_embeddings_path):
-        _write_csv(
-            embeddings_path,
-            master_embedding_rows,
-            MASTER_EMBEDDINGS_FIELDS,
-            MASTER_EMBEDDINGS_VECTOR_FIELDS,
-        )
     _write_json(master_manifest_path, manifest_payload)
     progress_archive_path = _archive_and_reset_progress(
         progress_dir=progress_dir,
@@ -294,39 +235,37 @@ def run_finalize_stage(
     )
 
     logger.info(
-        "Finalize complete: files=%d rows=%d upload=%s progress_archive=%s",
+        "Finalize complete: files=%d rows=%d embeddings=%d "
+        "inserted_rows=%d inserted_embeddings=%d document_upserts=%d "
+        "progress_archive=%s",
         len(manifest_records),
-        len(master_rows),
-        upload_data_path.name,
+        sync_result.master_row_count,
+        sync_result.master_embedding_row_count,
+        sync_result.inserted_data_rows,
+        sync_result.inserted_embedding_rows,
+        sync_result.upserted_document_rows,
         progress_archive_path,
     )
     return FinalizeStageResult(
         output_base_path=status.output_base_path,
-        upload_dir=upload_dir,
-        master_data_path=master_data_path,
-        master_embeddings_path=master_embeddings_path,
-        upload_data_path=upload_data_path,
-        upload_embeddings_path=upload_embeddings_path,
         master_manifest_path=master_manifest_path,
         progress_archive_path=progress_archive_path,
         table_name=resolved_table_name,
         processed_file_count=len(files_to_process),
         removed_file_count=len(files_to_remove),
         manifest_file_count=len(manifest_records),
-        master_row_count=len(master_rows),
-        master_embedding_row_count=len(master_embedding_rows),
+        master_row_count=sync_result.master_row_count,
+        master_embedding_row_count=sync_result.master_embedding_row_count,
     )
 
 
-def _merge_master_state(
+def _build_postgres_sync_state(
     existing_records: Sequence[ManifestRecord],
-    existing_rows: Sequence[dict[str, Any]],
-    existing_embedding_rows: Sequence[dict[str, Any]],
     process_records: Sequence[ManifestRecord],
     removal_records: Sequence[PendingRemovalRecord],
     progress_dir: Path,
-) -> tuple[tuple[ManifestRecord, ...], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Apply removal and processing progress to the current master state."""
+) -> tuple[tuple[ManifestRecord, ...], list[dict[str, Any]], list[dict[str, Any]], set[str]]:
+    """Return current manifest records and changed rows for PostgreSQL sync."""
     _validate_unique_manifest_records(existing_records, "existing master manifest")
     _validate_unique_manifest_records(process_records, "files_to_process")
     _validate_unique_removals(removal_records)
@@ -334,20 +273,10 @@ def _merge_master_state(
     removal_file_ids = {item.record.file_id for item in removal_records}
     process_file_ids = {record.file_id for record in process_records}
     replace_file_ids = removal_file_ids | process_file_ids
-
     kept_records = [
         record for record in existing_records if record.file_id not in replace_file_ids
     ]
-    kept_rows = [
-        row
-        for row in existing_rows
-        if str(row.get("file_id", "")) not in replace_file_ids
-    ]
-    kept_embedding_rows = [
-        row
-        for row in existing_embedding_rows
-        if str(row.get("file_id", "")) not in replace_file_ids
-    ]
+
     processed_rows: list[dict[str, Any]] = []
     processed_embedding_rows: list[dict[str, Any]] = []
     for record in process_records:
@@ -356,18 +285,10 @@ def _merge_master_state(
             _load_processed_embedding_rows(progress_dir, record)
         )
 
-    merged_records = tuple(sorted([*kept_records, *process_records], key=_record_key))
-    merged_rows = sorted(
-        [*kept_rows, *processed_rows],
-        key=_row_sort_key,
-    )
-    merged_embedding_rows = sorted(
-        [*kept_embedding_rows, *processed_embedding_rows],
-        key=_embedding_row_sort_key,
-    )
-    _validate_master_sync(merged_rows, merged_records)
-    _validate_master_embeddings_sync(merged_embedding_rows, merged_records)
-    return merged_records, merged_rows, merged_embedding_rows
+    _validate_master_sync(processed_rows, process_records)
+    _validate_master_embeddings_sync(processed_embedding_rows, process_records)
+    manifest_records = tuple(sorted([*kept_records, *process_records], key=_record_key))
+    return manifest_records, processed_rows, processed_embedding_rows, replace_file_ids
 
 
 def _load_processed_content_rows(
@@ -555,41 +476,42 @@ def _master_manifest_payload(
     manifest_records: Sequence[ManifestRecord],
     master_rows: Sequence[dict[str, Any]],
     master_embedding_rows: Sequence[dict[str, Any]],
+    row_counts: Mapping[str, int] | None = None,
+    embedding_row_count: int | None = None,
 ) -> dict[str, Any]:
     """Build the persisted master manifest JSON object."""
+    resolved_row_counts = row_counts or _row_counts_by_file_id(master_rows)
     return {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_at": generated_at,
         "table_name": table_name,
-        "master_data_file": MASTER_DATA_FILE_NAME,
-        "master_embeddings_file": MASTER_EMBEDDINGS_FILE_NAME,
-        "upload_dir": UPLOAD_DIR_NAME,
-        "upload_data_file": f"{UPLOAD_DIR_NAME}/{_upload_file_name(generated_at)}",
-        "upload_embeddings_file": (
-            f"{UPLOAD_DIR_NAME}/{_upload_embeddings_file_name(generated_at)}"
-        ),
+        "storage_target": "postgres",
+        "data_table": UPLOAD_FILE_PREFIX,
+        "embeddings_table": UPLOAD_EMBEDDINGS_FILE_PREFIX,
+        "source_documents_table": SOURCE_DOCUMENTS_TABLE,
         "output_base_path": _manifest_output_base_path(output_base_path),
         "file_count": len(manifest_records),
-        "row_count": len(master_rows),
-        "embedding_row_count": len(master_embedding_rows),
+        "row_count": sum(resolved_row_counts.values()),
+        "embedding_row_count": (
+            embedding_row_count
+            if embedding_row_count is not None
+            else len(master_embedding_rows)
+        ),
         "files": _manifest_file_records(
             manifest_records,
-            master_rows,
             created_at=generated_at,
+            row_counts=resolved_row_counts,
         ),
     }
 
 
 def _manifest_file_records(
     manifest_records: Sequence[ManifestRecord],
-    master_rows: Sequence[dict[str, Any]],
     created_at: str,
+    row_counts: Mapping[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Build file-level manifest records for the current master output."""
-    row_counts: dict[str, int] = {}
-    for row in master_rows:
-        file_id = str(row.get("file_id", ""))
-        row_counts[file_id] = row_counts.get(file_id, 0) + 1
+    resolved_row_counts = row_counts or {}
 
     return [
         {
@@ -604,11 +526,20 @@ def _manifest_file_records(
             "file_size": record.file_size,
             "file_hash": record.file_hash,
             "date_last_modified": record.date_last_modified,
-            "row_count": row_counts.get(record.file_id, 0),
+            "row_count": resolved_row_counts.get(record.file_id, 0),
             "created_at": created_at,
         }
         for record in manifest_records
     ]
+
+
+def _row_counts_by_file_id(rows: Sequence[dict[str, Any]]) -> dict[str, int]:
+    """Return chunk row counts by file_id."""
+    row_counts: dict[str, int] = {}
+    for row in rows:
+        file_id = str(row.get("file_id", ""))
+        row_counts[file_id] = row_counts.get(file_id, 0) + 1
+    return row_counts
 
 
 def _load_process_records(progress_dir: Path) -> tuple[ManifestRecord, ...]:
@@ -643,32 +574,6 @@ def _load_removal_records(progress_dir: Path) -> tuple[PendingRemovalRecord, ...
             )
         )
     return tuple(removals)
-
-
-def _read_master_data_csv(path: Path) -> list[dict[str, Any]]:
-    """Read the current master data CSV, returning normalized row records."""
-    if not path.exists():
-        return []
-    text = path.read_text(encoding="utf-8")
-    if not text.strip():
-        return []
-    reader = csv.DictReader(io.StringIO(text))
-    if reader.fieldnames is None:
-        return []
-    return [_normalize_master_row(row, path) for row in reader]
-
-
-def _read_master_embeddings_csv(path: Path) -> list[dict[str, Any]]:
-    """Read the current master embeddings CSV, returning normalized rows."""
-    if not path.exists():
-        return []
-    text = path.read_text(encoding="utf-8")
-    if not text.strip():
-        return []
-    reader = csv.DictReader(io.StringIO(text))
-    if reader.fieldnames is None:
-        return []
-    return [_normalize_master_embedding_row(row, path) for row in reader]
 
 
 def _normalize_master_row(row: Mapping[str, Any], source_path: Path) -> dict[str, Any]:
@@ -854,28 +759,6 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _write_csv(
-    path: Path,
-    rows: Sequence[dict[str, Any]],
-    fieldnames: Sequence[str],
-    embedding_fields: frozenset[str],
-) -> None:
-    """Write deterministic CSV using a stable master schema."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f".{path.name}.tmp")
-    with temp_path.open("w", encoding="utf-8", newline="") as file_obj:
-        writer = csv.DictWriter(
-            file_obj,
-            fieldnames=fieldnames,
-            extrasaction="ignore",
-            lineterminator="\n",
-        )
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(_csv_row(row, fieldnames, embedding_fields))
-    temp_path.replace(path)
-
-
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     """Write deterministic JSON with an atomic local replacement."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -969,51 +852,6 @@ def _reset_progress_dir(progress_dir: Path) -> None:
     progress_dir.mkdir(parents=True, exist_ok=True)
 
 
-def _csv_row(
-    row: Mapping[str, Any],
-    fieldnames: Sequence[str],
-    embedding_fields: frozenset[str],
-) -> dict[str, str]:
-    """Convert one master row into CSV scalar values."""
-    output = {}
-    for field in fieldnames:
-        value = row.get(field, "")
-        if value is None:
-            output[field] = ""
-        elif field in embedding_fields and _is_empty_vector(value):
-            output[field] = ""
-        elif isinstance(value, bool | list | dict):
-            output[field] = _remove_nul_bytes(json.dumps(value, separators=(",", ":")))
-        else:
-            output[field] = _remove_nul_bytes(str(value))
-    return output
-
-
-def _remove_nul_bytes(value: str) -> str:
-    """Remove NUL bytes that PostgreSQL text fields reject during COPY."""
-    return value.replace("\x00", "")
-
-
-def _is_empty_vector(value: Any) -> bool:
-    """Return whether an embedding value represents an absent vector."""
-    if value is None:
-        return True
-    if isinstance(value, list):
-        return len(value) == 0
-    if isinstance(value, str):
-        stripped = value.strip()
-        if not stripped:
-            return True
-        if stripped == "[]":
-            return True
-        try:
-            parsed = json.loads(stripped)
-        except json.JSONDecodeError:
-            return False
-        return isinstance(parsed, list) and len(parsed) == 0
-    return False
-
-
 def _manifest_record_from_mapping(row: Any, source_path: Path) -> ManifestRecord:
     """Convert one progress JSON row into a manifest record."""
     if not isinstance(row, Mapping):
@@ -1080,23 +918,13 @@ def _resolve_output_base_path(output_base_path: Path | None) -> Path:
 
 
 def _resolve_table_name(table_name: str | None) -> str:
-    """Resolve and validate the table name used as the CSV filename."""
+    """Resolve and validate the retrieval table name stored in the manifest."""
     if table_name is None:
-        return get_master_data_table_name()
+        return UPLOAD_FILE_PREFIX
     value = table_name.strip()
     if not value:
         raise FinalizeStageError("table_name must not be blank")
     return value
-
-
-def _upload_file_name(generated_at: str) -> str:
-    """Return the timestamped upload CSV filename for one finalize run."""
-    return f"{UPLOAD_FILE_PREFIX}_{_timestamp_for_path(generated_at)}.csv"
-
-
-def _upload_embeddings_file_name(generated_at: str) -> str:
-    """Return the timestamped embedding upload CSV filename for one run."""
-    return f"{UPLOAD_EMBEDDINGS_FILE_PREFIX}_{_timestamp_for_path(generated_at)}.csv"
 
 
 def _timestamp_for_path(value: str) -> str:
@@ -1125,63 +953,6 @@ def _record_key(record: ManifestRecord) -> tuple[str, str, str, str, str]:
         record.bank,
         record.file_id,
     )
-
-
-def _row_sort_key(
-    row: Mapping[str, Any],
-) -> tuple[
-    str,
-    str,
-    str,
-    str,
-    tuple[int, int | str],
-    tuple[tuple[int, int | str], ...],
-]:
-    """Return a deterministic row key that preserves natural sheet ordering."""
-    return (
-        str(row.get("source_type", "")),
-        str(row.get("fiscal_year", "")),
-        str(row.get("quarter", "")),
-        str(row.get("bank", "")),
-        _numeric_sort_key(row.get("page_number", "")),
-        _natural_sort_key(str(row.get("chunk_id", ""))),
-    )
-
-
-def _embedding_row_sort_key(
-    row: Mapping[str, Any],
-) -> tuple[str, str, str, str, str, str, str]:
-    """Return a deterministic sort key for long-form embedding rows."""
-    return (
-        str(row.get("source_type", "")),
-        str(row.get("fiscal_year", "")),
-        str(row.get("quarter", "")),
-        str(row.get("bank", "")),
-        str(row.get("file_id", "")),
-        str(row.get("embedding_type", "")),
-        str(row.get("embedding_id", "")),
-    )
-
-
-def _numeric_sort_key(value: Any) -> tuple[int, int | str]:
-    """Return a sortable numeric-first key for values that may be blank text."""
-    try:
-        return (0, int(str(value)))
-    except (TypeError, ValueError):
-        return (1, str(value))
-
-
-def _natural_sort_key(value: str) -> tuple[tuple[int, int | str], ...]:
-    """Split a text key so numeric fragments sort by value rather than text."""
-    parts: list[tuple[int, int | str]] = []
-    for part in re.split(r"(\d+)", value):
-        if not part:
-            continue
-        if part.isdigit():
-            parts.append((0, int(part)))
-        else:
-            parts.append((1, part))
-    return tuple(parts)
 
 
 def _utc_now() -> str:

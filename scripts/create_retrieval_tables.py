@@ -1,8 +1,8 @@
-"""Create public PostgreSQL retrieval tables for an Aegis pipeline source.
+"""Create public PostgreSQL retrieval and source-document tables.
 
 The script reads database connection settings from the selected source's
-``.env`` by default, validates the local master CSV headers against the source
-pipeline schemas, and creates two public tables.
+``.env`` by default and creates the source's retrieval tables plus the shared
+``public.aegis_source_documents`` byte table.
 
 Examples:
     venv/bin/python scripts/create_retrieval_tables.py --source investor_slides
@@ -15,7 +15,6 @@ Run ``--help`` for the supported source names.
 from __future__ import annotations
 
 import argparse
-import csv
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +33,7 @@ from retrieval_source_config import (  # noqa: E402
 )
 
 PUBLIC_SCHEMA = "public"
+DEFAULT_DOCUMENTS_TABLE = "aegis_source_documents"
 DATA_EMBEDDING_COLUMNS = (
     "keyword_embedding",
     "metric_embedding",
@@ -85,9 +85,6 @@ EMBEDDINGS_SCALAR_COLUMNS = {
 
 MASTER_DATA_FIELDS: tuple[str, ...]
 MASTER_EMBEDDINGS_FIELDS: tuple[str, ...]
-MASTER_DATA_FILE_NAME: str
-MASTER_EMBEDDINGS_FILE_NAME: str
-DEFAULT_LOCAL_OUTPUT_PATH: Path
 ENV_PATH: Path
 get_database_config: Any
 get_embedding_config: Any
@@ -100,14 +97,14 @@ class ScriptConfig:
 
     source: RetrievalSource
     env_file: Path
-    master_data_csv: Path
-    master_embeddings_csv: Path
     data_table: str
     embeddings_table: str
+    documents_table: str
     embedding_storage: str
     embedding_dimensions: int
     apply: bool
     create_vector_extension: bool
+    create_documents_table: bool
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -117,12 +114,6 @@ def main(argv: list[str] | None = None) -> int:
     _activate_source_modules(load_source_modules(source))
     args = _parse_args(argv_list, source)
     config = _resolve_config(args, source)
-    _validate_csv_header(config.master_data_csv, MASTER_DATA_FIELDS, "master data")
-    _validate_csv_header(
-        config.master_embeddings_csv,
-        MASTER_EMBEDDINGS_FIELDS,
-        "master embeddings",
-    )
 
     statements = _build_setup_statements(config)
     if not config.apply:
@@ -142,7 +133,12 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "Master tables created: "
         f'{PUBLIC_SCHEMA}."{config.data_table}", '
-        f'{PUBLIC_SCHEMA}."{config.embeddings_table}"',
+        f'{PUBLIC_SCHEMA}."{config.embeddings_table}"'
+        + (
+            f', {PUBLIC_SCHEMA}."{config.documents_table}"'
+            if config.create_documents_table
+            else ""
+        ),
     )
     return 0
 
@@ -151,13 +147,6 @@ def _activate_source_modules(modules: SourceModules) -> None:
     """Bind selected source module constants used by the shared implementation."""
     globals()["MASTER_DATA_FIELDS"] = modules.finalize.MASTER_DATA_FIELDS
     globals()["MASTER_EMBEDDINGS_FIELDS"] = modules.finalize.MASTER_EMBEDDINGS_FIELDS
-    globals()["MASTER_EMBEDDINGS_FILE_NAME"] = (
-        modules.finalize.MASTER_EMBEDDINGS_FILE_NAME
-    )
-    globals()["MASTER_DATA_FILE_NAME"] = modules.manifest.MASTER_DATA_FILE_NAME
-    globals()["DEFAULT_LOCAL_OUTPUT_PATH"] = (
-        modules.config_setup.DEFAULT_LOCAL_OUTPUT_PATH
-    )
     globals()["ENV_PATH"] = modules.config_setup.ENV_PATH
     globals()["get_database_config"] = modules.config_setup.get_database_config
     globals()["get_embedding_config"] = modules.config_setup.get_embedding_config
@@ -182,18 +171,6 @@ def _parse_args(argv: list[str], source: RetrievalSource) -> argparse.Namespace:
         help="Dotenv file with DB_HOST, DB_PORT, DB_NAME, DB_USER, and DB_PASSWORD.",
     )
     parser.add_argument(
-        "--master-data-csv",
-        type=Path,
-        default=DEFAULT_LOCAL_OUTPUT_PATH / MASTER_DATA_FILE_NAME,
-        help="Master data CSV whose header should match the chunk table schema.",
-    )
-    parser.add_argument(
-        "--master-embeddings-csv",
-        type=Path,
-        default=DEFAULT_LOCAL_OUTPUT_PATH / MASTER_EMBEDDINGS_FILE_NAME,
-        help="Master embeddings CSV whose header should match the vector table schema.",
-    )
-    parser.add_argument(
         "--data-table-name",
         default=source.data_table,
         help=(f"Public chunk table name. Defaults to {source.data_table!r}."),
@@ -204,6 +181,14 @@ def _parse_args(argv: list[str], source: RetrievalSource) -> argparse.Namespace:
         help=(
             f"Public embeddings table name. Defaults to "
             f"{source.embeddings_table!r}."
+        ),
+    )
+    parser.add_argument(
+        "--documents-table-name",
+        default=DEFAULT_DOCUMENTS_TABLE,
+        help=(
+            "Shared public table for original source document bytes. Defaults to "
+            f"{DEFAULT_DOCUMENTS_TABLE!r}."
         ),
     )
     parser.add_argument(
@@ -223,6 +208,11 @@ def _parse_args(argv: list[str], source: RetrievalSource) -> argparse.Namespace:
         help="Do not run CREATE EXTENSION IF NOT EXISTS vector.",
     )
     parser.add_argument(
+        "--skip-source-documents-table",
+        action="store_true",
+        help="Do not create the shared source document byte table.",
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="Execute SQL. Without this flag, the script is a dry run.",
@@ -236,55 +226,33 @@ def _resolve_config(args: argparse.Namespace, source: RetrievalSource) -> Script
     if not env_file.is_file():
         raise FileNotFoundError(f"Env file not found: {env_file}")
 
-    master_data_csv = args.master_data_csv.expanduser().resolve()
-    if not master_data_csv.is_file():
-        raise FileNotFoundError(f"Master data CSV not found: {master_data_csv}")
-
-    master_embeddings_csv = args.master_embeddings_csv.expanduser().resolve()
-    if not master_embeddings_csv.is_file():
-        raise FileNotFoundError(
-            f"Master embeddings CSV not found: {master_embeddings_csv}"
-        )
-
     load_config(env_file, override=True)
     dimensions = args.embedding_dimensions or get_embedding_config().dimensions
     if dimensions < 1:
         raise ValueError("--embedding-dimensions must be a positive integer")
 
+    data_table = str(args.data_table_name).strip()
+    embeddings_table = str(args.embeddings_table_name).strip()
+    documents_table = str(args.documents_table_name).strip()
+    if not data_table:
+        raise ValueError("--data-table-name must not be blank")
+    if not embeddings_table:
+        raise ValueError("--embeddings-table-name must not be blank")
+    if not documents_table:
+        raise ValueError("--documents-table-name must not be blank")
+
     return ScriptConfig(
         source=source,
         env_file=env_file,
-        master_data_csv=master_data_csv,
-        master_embeddings_csv=master_embeddings_csv,
-        data_table=str(args.data_table_name).strip(),
-        embeddings_table=str(args.embeddings_table_name).strip(),
+        data_table=data_table,
+        embeddings_table=embeddings_table,
+        documents_table=documents_table,
         embedding_storage=args.embedding_storage,
         embedding_dimensions=dimensions,
         apply=args.apply,
         create_vector_extension=not args.skip_vector_extension,
+        create_documents_table=not args.skip_source_documents_table,
     )
-
-
-def _validate_csv_header(
-    path: Path,
-    expected_fields: tuple[str, ...],
-    label: str,
-) -> None:
-    """Reject CSV files whose header does not match the expected schema."""
-    with path.open("r", encoding="utf-8", newline="") as file_obj:
-        reader = csv.reader(file_obj)
-        try:
-            header = next(reader)
-        except StopIteration as exc:
-            raise ValueError(f"{label} CSV is empty: {path}") from exc
-
-    expected = list(expected_fields)
-    if header != expected:
-        raise ValueError(
-            f"{label} CSV header does not match expected fields.\n"
-            f"Expected: {expected}\n"
-            f"Actual:   {header}",
-        )
 
 
 def _build_setup_statements(config: ScriptConfig) -> list[sql.Composable]:
@@ -295,6 +263,8 @@ def _build_setup_statements(config: ScriptConfig) -> list[sql.Composable]:
 
     statements.append(_create_data_table_statement(config))
     statements.append(_create_embeddings_table_statement(config))
+    if config.create_documents_table:
+        statements.extend(_create_documents_table_statements(config))
     return statements
 
 
@@ -330,6 +300,57 @@ def _create_embeddings_table_statement(config: ScriptConfig) -> sql.Composable:
         _table_ref(config.embeddings_table),
         sql.SQL(", ").join(definitions),
     )
+
+
+def _create_documents_table_statements(config: ScriptConfig) -> list[sql.Composable]:
+    """Return DDL for the shared original source document table."""
+    table = _table_ref(config.documents_table)
+    return [
+        sql.SQL(
+            """
+            CREATE TABLE IF NOT EXISTS {} (
+                source_type text NOT NULL,
+                file_id text NOT NULL,
+                fiscal_year text NOT NULL,
+                quarter text NOT NULL,
+                bank text NOT NULL,
+                filename text NOT NULL,
+                file_type text NOT NULL,
+                file_path text NOT NULL,
+                mime_type text NOT NULL,
+                file_hash text NOT NULL,
+                file_size bigint NOT NULL,
+                date_last_modified timestamptz,
+                original_bytes bytea NOT NULL,
+                preview_mime_type text,
+                preview_bytes bytea,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                updated_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (source_type, file_id),
+                CHECK (file_size >= 0)
+            )
+            """,
+        ).format(table),
+        sql.SQL(
+            """
+            CREATE INDEX IF NOT EXISTS {} ON {} (
+                source_type,
+                bank,
+                fiscal_year,
+                quarter
+            )
+            """,
+        ).format(
+            sql.Identifier("idx_aegis_source_documents_bank_period"),
+            table,
+        ),
+        sql.SQL(
+            "CREATE INDEX IF NOT EXISTS {} ON {} (file_hash)",
+        ).format(
+            sql.Identifier("idx_aegis_source_documents_file_hash"),
+            table,
+        ),
+    ]
 
 
 def _data_column_type(column: str, config: ScriptConfig) -> str:
