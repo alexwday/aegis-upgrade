@@ -136,6 +136,22 @@ outputs, migrate each source once before relying on incremental pipeline runs:
 .venv/bin/python scripts/migrate_retrieval_csvs_to_postgres.py --source investor_slides --apply
 ```
 
+To migrate every source from existing local CSV outputs:
+
+```bash
+for source in \
+  investor_slides \
+  supplementary_financials \
+  rts \
+  pillar3 \
+  transcripts \
+  event_transcripts; do
+  .venv/bin/python scripts/migrate_retrieval_csvs_to_postgres.py \
+    --source "$source" \
+    --apply
+done
+```
+
 ## Run Pipelines
 
 ```bash
