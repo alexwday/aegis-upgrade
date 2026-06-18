@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import re
 import textwrap
+import warnings
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -228,11 +229,18 @@ def _build_xlsx_preview(
     from reportlab.lib.pagesizes import landscape, letter
     from reportlab.pdfgen import canvas
 
-    workbook = load_workbook(
-        io.BytesIO(original_bytes),
-        data_only=True,
-        read_only=True,
-    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Print area cannot be set to Defined name:*",
+            category=UserWarning,
+            module="openpyxl.reader.workbook",
+        )
+        workbook = load_workbook(
+            io.BytesIO(original_bytes),
+            data_only=True,
+            read_only=True,
+        )
     workbook_sheet_count = len(workbook.sheetnames)
     page_size = landscape(letter)
     buffer = io.BytesIO()
