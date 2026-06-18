@@ -159,6 +159,15 @@ After syncing source tables, refresh the agent availability preflight table:
 .venv/bin/python scripts/db_setup.py --refresh-availability
 ```
 
+## Test Source Document Preview Links
+
+Open a local UI that samples one random chunk-backed source document link per
+source, then streams the selected document bytes from Postgres when clicked:
+
+```bash
+.venv/bin/python scripts/test_source_document_preview.py --env-file .env
+```
+
 ## Run The Agent
 
 ```bash
