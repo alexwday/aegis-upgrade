@@ -11,9 +11,10 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import quote
 
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,7 +25,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from aegis_agent.connections.llm_connector import close_all_clients  # noqa: E402
-from aegis_agent.connections.postgres_connector import close_all_connections  # noqa: E402
+from aegis_agent.connections.postgres_connector import close_all_connections, fetch_one  # noqa: E402
 from aegis_agent.model.main import model  # noqa: E402
 from aegis_agent.utils.logging import get_logger, setup_logging  # noqa: E402
 
@@ -81,6 +82,98 @@ async def root() -> FileResponse:
 async def health() -> JSONResponse:
     """Basic health endpoint."""
     return JSONResponse({"status": "ok", "service": "aegis-agent"})
+
+
+def _safe_header_filename(filename: str) -> str:
+    """Return a conservative filename for Content-Disposition."""
+    return filename.replace("\\", "_").replace("/", "_").replace('"', "_")
+
+
+def _bytes_from_db(value: Any) -> bytes:
+    """Normalize bytea values returned by async drivers."""
+    if value is None:
+        return b""
+    if isinstance(value, memoryview):
+        return value.tobytes()
+    return bytes(value)
+
+
+def _preview_filename(filename: str, mime_type: str) -> str:
+    """Return a browser-friendly filename for preview bytes."""
+    if mime_type.lower() == "application/pdf":
+        return _safe_header_filename(str(Path(filename).with_suffix(".pdf")))
+    if mime_type.lower().startswith("text/html"):
+        return _safe_header_filename(str(Path(filename).with_suffix(".html")))
+    return _safe_header_filename(filename)
+
+
+async def _load_source_document(source: str, file_id: str) -> Dict[str, Any]:
+    """Load one source document byte row from Postgres."""
+    if source not in SOURCE_FILTER_IDS:
+        raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
+    row = await fetch_one(
+        """
+        SELECT
+            filename,
+            mime_type,
+            preview_mime_type,
+            preview_bytes,
+            original_bytes,
+            preview_error
+        FROM public.aegis_source_documents
+        WHERE source_type = :source
+          AND file_id = :file_id
+        LIMIT 1
+        """,
+        {"source": source, "file_id": file_id},
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Source document not found")
+    return row
+
+
+@app.get("/source-documents/{source}/{file_id}/preview")
+async def source_document_preview(source: str, file_id: str) -> Response:
+    """Stream pre-generated browser preview bytes for a source document."""
+    row = await _load_source_document(source, file_id)
+    preview_error = str(row.get("preview_error") or "")
+    if preview_error:
+        raise HTTPException(status_code=409, detail=preview_error)
+
+    content = _bytes_from_db(row.get("preview_bytes"))
+    mime_type = str(row.get("preview_mime_type") or "")
+    if not content or not mime_type:
+        raise HTTPException(status_code=409, detail="Preview bytes are missing")
+
+    filename = _preview_filename(str(row.get("filename") or file_id), mime_type)
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'inline; filename="{quote(filename)}"',
+        },
+    )
+
+
+@app.get("/source-documents/{source}/{file_id}/download")
+async def source_document_download(source: str, file_id: str) -> Response:
+    """Stream exact original source bytes as an attachment."""
+    row = await _load_source_document(source, file_id)
+    content = _bytes_from_db(row.get("original_bytes"))
+    if not content:
+        raise HTTPException(status_code=404, detail="Original bytes are missing")
+
+    filename = _safe_header_filename(str(row.get("filename") or file_id))
+    mime_type = str(row.get("mime_type") or "application/octet-stream")
+    return Response(
+        content=content,
+        media_type=mime_type,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="{quote(filename)}"',
+        },
+    )
 
 
 def _user_message_from_payload(payload: Dict[str, Any]) -> Dict[str, str]:

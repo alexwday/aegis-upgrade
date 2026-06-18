@@ -1728,6 +1728,8 @@ def build_source_reference(ref_id: str, chunk: Dict[str, Any]) -> Dict[str, Any]
 
     return {
         "ref_id": ref_id,
+        "source_type": chunk.get("source_type", ""),
+        "file_id": chunk.get("file_id", ""),
         "filename": filename,
         "file_path": file_path,
         "s3_key": s3_key,

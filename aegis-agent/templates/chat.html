@@ -58,9 +58,10 @@
 
       .app {
         display: grid;
-        grid-template-columns: minmax(0, 1fr);
+        grid-template-columns: minmax(520px, 0.94fr) minmax(390px, 0.66fr);
+        gap: 12px;
         height: 100vh;
-        max-width: 1120px;
+        max-width: 1540px;
         margin: 0 auto;
         padding: 14px;
       }
@@ -73,6 +74,196 @@
         border: 1px solid rgba(15, 23, 42, 0.08);
         border-radius: 10px;
         box-shadow: var(--shadow);
+      }
+
+      .source-preview {
+        display: grid;
+        grid-template-rows: auto auto auto minmax(0, 1fr);
+        min-width: 0;
+        min-height: 0;
+        background: var(--panel);
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 10px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .preview-titlebar,
+      .preview-locationbar,
+      .preview-actionbar {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-width: 0;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .preview-titlebar {
+        justify-content: space-between;
+        padding: 10px 11px;
+      }
+
+      .preview-title-text,
+      .preview-location-text {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .preview-kicker,
+      .preview-location-kind {
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        line-height: 1;
+        text-transform: uppercase;
+      }
+
+      .preview-document-title,
+      .preview-location-title {
+        min-width: 0;
+        color: var(--aegis-navy);
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.25;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .preview-recent {
+        position: relative;
+        flex: 0 0 auto;
+      }
+
+      .preview-recent-button,
+      .preview-icon-button,
+      .preview-download {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 32px;
+        min-height: 30px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #ffffff;
+        color: var(--aegis-navy);
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1;
+        text-decoration: none;
+      }
+
+      .preview-recent-button {
+        gap: 5px;
+        min-width: 76px;
+      }
+
+      .preview-icon-button:disabled,
+      .preview-recent-button:disabled,
+      .preview-download.disabled {
+        cursor: not-allowed;
+        opacity: 0.42;
+      }
+
+      .preview-recent-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        z-index: 4;
+        display: grid;
+        gap: 3px;
+        width: min(330px, 78vw);
+        padding: 6px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14);
+      }
+
+      .preview-recent-menu[hidden] {
+        display: none;
+      }
+
+      .preview-recent-item {
+        display: grid;
+        gap: 2px;
+        width: 100%;
+        min-height: 42px;
+        padding: 7px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text);
+        text-align: left;
+      }
+
+      .preview-recent-item:hover {
+        background: var(--soft);
+      }
+
+      .preview-recent-item strong,
+      .preview-recent-item span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .preview-recent-item strong {
+        font-size: 11px;
+      }
+
+      .preview-recent-item span {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      .preview-locationbar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        padding: 8px 10px;
+        background: var(--soft-2);
+      }
+
+      .preview-actionbar {
+        justify-content: space-between;
+        padding: 8px 10px;
+      }
+
+      .preview-zoom-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .preview-zoom-label {
+        min-width: 44px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        text-align: center;
+      }
+
+      .preview-frame-shell {
+        min-width: 0;
+        min-height: 0;
+        overflow: auto;
+        background: #dfe6ee;
+      }
+
+      .source-preview-frame {
+        display: block;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        border: 0;
+        background: #ffffff;
+        transform-origin: 0 0;
       }
 
       .topbar {
@@ -1421,11 +1612,16 @@
 
       @media (max-width: 900px) {
         .app {
+          grid-template-columns: 1fr;
           height: auto;
           min-height: 100vh;
         }
 
         .chat {
+          min-height: 72vh;
+        }
+
+        .source-preview {
           min-height: 72vh;
         }
       }
@@ -1519,6 +1715,94 @@
           <button class="send" type="submit">Send</button>
         </form>
       </section>
+      <aside id="sourcePreview" class="source-preview" aria-label="Source document preview">
+        <div class="preview-titlebar">
+          <div class="preview-title-text">
+            <span class="preview-kicker">Source preview</span>
+            <strong id="previewDocumentTitle" class="preview-document-title">No document open</strong>
+          </div>
+          <div class="preview-recent">
+            <button
+              id="previewRecentButton"
+              class="preview-recent-button"
+              type="button"
+              aria-expanded="false"
+              disabled
+              title="Recently opened documents"
+            >
+              Recent ▾
+            </button>
+            <div id="previewRecentMenu" class="preview-recent-menu" hidden></div>
+          </div>
+        </div>
+        <div class="preview-locationbar">
+          <button
+            id="previewPrevious"
+            class="preview-icon-button"
+            type="button"
+            aria-label="Previous page or sheet"
+            title="Previous"
+            disabled
+          >
+            ‹
+          </button>
+          <div class="preview-location-text">
+            <span id="previewLocationKind" class="preview-location-kind">Location</span>
+            <strong id="previewLocationTitle" class="preview-location-title">No reference selected</strong>
+          </div>
+          <button
+            id="previewNext"
+            class="preview-icon-button"
+            type="button"
+            aria-label="Next page or sheet"
+            title="Next"
+            disabled
+          >
+            ›
+          </button>
+        </div>
+        <div class="preview-actionbar">
+          <div class="preview-zoom-controls" aria-label="Preview zoom controls">
+            <button
+              id="previewZoomOut"
+              class="preview-icon-button"
+              type="button"
+              aria-label="Zoom out"
+              title="Zoom out"
+              disabled
+            >
+              −
+            </button>
+            <span id="previewZoomLabel" class="preview-zoom-label">100%</span>
+            <button
+              id="previewZoomIn"
+              class="preview-icon-button"
+              type="button"
+              aria-label="Zoom in"
+              title="Zoom in"
+              disabled
+            >
+              +
+            </button>
+          </div>
+          <a
+            id="previewDownload"
+            class="preview-download disabled"
+            href="#"
+            aria-disabled="true"
+            title="Download original document"
+          >
+            Download
+          </a>
+        </div>
+        <div id="previewFrameShell" class="preview-frame-shell">
+          <iframe
+            id="sourcePreviewFrame"
+            class="source-preview-frame"
+            title="Current source document preview"
+          ></iframe>
+        </div>
+      </aside>
     </main>
 
     <script>
@@ -1530,9 +1814,47 @@
       const sourceCheckboxes = Array.from(
         document.querySelectorAll('input[name="source-filter"]'),
       );
+      const previewDocumentTitle = document.getElementById("previewDocumentTitle");
+      const previewRecentButton = document.getElementById("previewRecentButton");
+      const previewRecentMenu = document.getElementById("previewRecentMenu");
+      const previewLocationKind = document.getElementById("previewLocationKind");
+      const previewLocationTitle = document.getElementById("previewLocationTitle");
+      const previewPrevious = document.getElementById("previewPrevious");
+      const previewNext = document.getElementById("previewNext");
+      const previewZoomOut = document.getElementById("previewZoomOut");
+      const previewZoomIn = document.getElementById("previewZoomIn");
+      const previewZoomLabel = document.getElementById("previewZoomLabel");
+      const previewDownload = document.getElementById("previewDownload");
+      const previewFrameShell = document.getElementById("previewFrameShell");
+      const sourcePreviewFrame = document.getElementById("sourcePreviewFrame");
       let ws;
       let activeTurn = null;
       let currentUserRequest = "";
+      const previewState = {
+        current: null,
+        recent: [],
+        zoom: 1,
+      };
+      const previewPlaceholderHtml = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body {
+      align-items: center;
+      color: #64748b;
+      display: flex;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      height: 100vh;
+      justify-content: center;
+      margin: 0;
+    }
+  </style>
+</head>
+<body>No document open</body>
+</html>`;
+
+      sourcePreviewFrame.srcdoc = previewPlaceholderHtml;
 
       function getSelectedSourceFilter() {
         const selected = sourceCheckboxes
@@ -1564,6 +1886,305 @@
           .replaceAll(">", "&gt;")
           .replaceAll('"', "&quot;")
           .replaceAll("'", "&#039;");
+      }
+
+      function positiveNumber(value) {
+        const parsed = Number.parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      }
+
+      function urlForHref(href) {
+        try {
+          return new URL(String(href || ""), window.location.href);
+        } catch (_error) {
+          return null;
+        }
+      }
+
+      function hrefWithoutHash(href) {
+        const parsed = urlForHref(href);
+        if (!parsed) {
+          return String(href || "").split("#")[0];
+        }
+        parsed.hash = "";
+        if (parsed.origin === window.location.origin) {
+          return `${parsed.pathname}${parsed.search}`;
+        }
+        return parsed.toString();
+      }
+
+      function fileTypeForReference(reference = {}, href = "") {
+        const direct = String(reference.file_type || "").trim().toLowerCase();
+        if (direct) {
+          return direct;
+        }
+        const filename = String(reference.filename || href || "").toLowerCase();
+        const match = filename.match(/\.([a-z0-9]+)(?:[#?].*)?$/);
+        return match ? match[1] : "";
+      }
+
+      function targetFromHref(href) {
+        const parsed = urlForHref(href);
+        const hash = parsed?.hash || "";
+        const sheetMatch = hash.match(/sheet-(\d+)/i);
+        if (sheetMatch) {
+          return { kind: "sheet", number: positiveNumber(sheetMatch[1]) };
+        }
+        const pageMatch = hash.match(/page=(\d+)/i);
+        if (pageMatch) {
+          return { kind: "page", number: positiveNumber(pageMatch[1]) };
+        }
+        return { kind: "", number: null };
+      }
+
+      function targetForReference(reference, href, fileType) {
+        const target = targetFromHref(href);
+        if (target.number) {
+          return target;
+        }
+        const pageNumber = positiveNumber(reference?.page_number);
+        if (!pageNumber) {
+          return { kind: "", number: null };
+        }
+        if (fileType === "xlsx") {
+          return { kind: "sheet", number: pageNumber };
+        }
+        return { kind: fileType === "xml" ? "unit" : "page", number: pageNumber };
+      }
+
+      function fragmentForPreview(entry) {
+        const targetNumber = positiveNumber(entry?.target?.number);
+        if (!targetNumber) {
+          return "";
+        }
+        if (entry.fileType === "xlsx" || entry.target.kind === "sheet") {
+          return `sheet-${targetNumber}`;
+        }
+        const zoom = Math.round(previewState.zoom * 100);
+        return `page=${targetNumber}&zoom=${zoom}`;
+      }
+
+      function previewHrefForEntry(entry) {
+        if (!entry?.baseHref) {
+          return "";
+        }
+        const fragment = fragmentForPreview(entry);
+        return fragment ? `${entry.baseHref}#${fragment}` : entry.baseHref;
+      }
+
+      function downloadHrefForReference(reference, href) {
+        if (reference?.download_href) {
+          return reference.download_href;
+        }
+        const cleanHref = hrefWithoutHash(reference?.href || href || "");
+        if (cleanHref.endsWith("/preview")) {
+          return cleanHref.replace(/\/preview$/, "/download");
+        }
+        return cleanHref || "#";
+      }
+
+      function locationKindForEntry(entry) {
+        if (!entry) {
+          return "Location";
+        }
+        if (entry.fileType === "xlsx" || entry.target.kind === "sheet") {
+          return "Sheet";
+        }
+        if (entry.fileType === "xml" || entry.target.kind === "unit") {
+          return "Unit";
+        }
+        return "Page";
+      }
+
+      function locationTitleForEntry(entry) {
+        if (!entry) {
+          return "No reference selected";
+        }
+        const targetNumber = positiveNumber(entry.target?.number);
+        const fallback = targetNumber
+          ? `${locationKindForEntry(entry)} ${targetNumber}`
+          : "Document";
+        return entry.sheetName || entry.sectionName || entry.locationLabel || fallback;
+      }
+
+      function recentSubtitle(entry) {
+        const location = locationTitleForEntry(entry);
+        const source = entry.sourceLabel || "Source";
+        return location ? `${source} · ${location}` : source;
+      }
+
+      function setPreviewDownload(href) {
+        if (!href || href === "#") {
+          previewDownload.href = "#";
+          previewDownload.classList.add("disabled");
+          previewDownload.setAttribute("aria-disabled", "true");
+          previewDownload.removeAttribute("download");
+          return;
+        }
+        previewDownload.href = href;
+        previewDownload.classList.remove("disabled");
+        previewDownload.setAttribute("aria-disabled", "false");
+        previewDownload.setAttribute("download", "");
+      }
+
+      function renderRecentPreviewMenu() {
+        previewRecentButton.disabled = previewState.recent.length === 0;
+        previewRecentMenu.innerHTML = previewState.recent
+          .map(
+            (entry, index) => `<button class="preview-recent-item" type="button" data-recent-index="${index}">
+              <strong>${escapeHtml(entry.title)}</strong>
+              <span>${escapeHtml(recentSubtitle(entry))}</span>
+            </button>`,
+          )
+          .join("");
+      }
+
+      function rememberPreviewEntry(entry) {
+        const id = entry.id || entry.baseHref || entry.title;
+        previewState.recent = [
+          { ...entry, target: { ...entry.target }, id },
+          ...previewState.recent.filter((item) => (item.id || item.baseHref) !== id),
+        ].slice(0, 5);
+        renderRecentPreviewMenu();
+      }
+
+      function applyPreviewZoomMode() {
+        const entry = previewState.current;
+        const zoom = previewState.zoom;
+        previewZoomLabel.textContent = `${Math.round(zoom * 100)}%`;
+        if (entry?.fileType === "xlsx") {
+          sourcePreviewFrame.style.width = `${100 / zoom}%`;
+          sourcePreviewFrame.style.height = `${100 / zoom}%`;
+          sourcePreviewFrame.style.transform = `scale(${zoom})`;
+          return;
+        }
+        sourcePreviewFrame.style.width = "100%";
+        sourcePreviewFrame.style.height = "100%";
+        sourcePreviewFrame.style.transform = "none";
+      }
+
+      function renderPreviewState({ reload = false } = {}) {
+        const entry = previewState.current;
+        previewDocumentTitle.textContent = entry?.title || "No document open";
+        previewLocationKind.textContent = locationKindForEntry(entry);
+        previewLocationTitle.textContent = locationTitleForEntry(entry);
+        previewPrevious.disabled = !entry?.target?.number || entry.target.number <= 1;
+        previewNext.disabled = !entry?.target?.number;
+        previewZoomOut.disabled = !entry;
+        previewZoomIn.disabled = !entry;
+        setPreviewDownload(entry?.downloadHref || "");
+        applyPreviewZoomMode();
+
+        if (entry && reload) {
+          sourcePreviewFrame.removeAttribute("srcdoc");
+          sourcePreviewFrame.src = previewHrefForEntry(entry);
+          previewFrameShell.scrollTop = 0;
+          previewFrameShell.scrollLeft = 0;
+        }
+      }
+
+      function openSourcePreview(reference = {}, link = null) {
+        const href = String(reference.href || link?.getAttribute("href") || "").trim();
+        if (!href || href === "#") {
+          previewState.current = null;
+          sourcePreviewFrame.srcdoc = previewPlaceholderHtml;
+          renderPreviewState();
+          return false;
+        }
+
+        const fileType = fileTypeForReference(reference, href);
+        const target = targetForReference(reference, href, fileType);
+        const title =
+          reference.filename ||
+          reference.display_label ||
+          link?.textContent?.trim() ||
+          "Source document";
+        const entry = {
+          id: `${reference.source_id || link?.dataset.sourceKey || "source"}:${reference.file_id || href}`,
+          sourceLabel: reference.source_label || titleCaseSource(reference.source_id || link?.dataset.sourceKey || "source"),
+          title,
+          fileType,
+          href,
+          baseHref: hrefWithoutHash(href),
+          downloadHref: downloadHrefForReference(reference, href),
+          target,
+          locationLabel: reference.location_label || "",
+          sheetName: reference.sheet_name || "",
+          sectionName: reference.section_name || "",
+        };
+
+        previewState.current = entry;
+        previewState.zoom = 1;
+        rememberPreviewEntry(entry);
+        renderPreviewState({ reload: true });
+        return true;
+      }
+
+      function navigatePreviewLocation(direction) {
+        const entry = previewState.current;
+        const currentNumber = positiveNumber(entry?.target?.number);
+        if (!entry || !currentNumber) {
+          return;
+        }
+        const nextNumber = currentNumber + direction;
+        if (nextNumber < 1) {
+          return;
+        }
+        entry.target = { ...entry.target, number: nextNumber };
+        entry.locationLabel = "";
+        entry.sheetName = "";
+        entry.sectionName = "";
+        rememberPreviewEntry(entry);
+        renderPreviewState({ reload: true });
+      }
+
+      function setPreviewZoom(delta) {
+        if (!previewState.current) {
+          return;
+        }
+        const nextZoom = Math.min(2, Math.max(0.6, Number((previewState.zoom + delta).toFixed(2))));
+        if (nextZoom === previewState.zoom) {
+          return;
+        }
+        previewState.zoom = nextZoom;
+        if (previewState.current.fileType === "xlsx") {
+          renderPreviewState();
+          return;
+        }
+        renderPreviewState({ reload: true });
+      }
+
+      function syncPreviewLocationFromFrame() {
+        const entry = previewState.current;
+        const targetNumber = positiveNumber(entry?.target?.number);
+        if (!entry || entry.fileType !== "xlsx" || !targetNumber) {
+          return;
+        }
+        try {
+          const sheet = sourcePreviewFrame.contentDocument?.getElementById(`sheet-${targetNumber}`);
+          const heading = sheet?.querySelector("h2")?.textContent?.trim() || "";
+          const sheetName = heading.replace(/^Sheet\s+\d+:\s*/i, "").trim();
+          if (!sheetName) {
+            return;
+          }
+          entry.sheetName = sheetName;
+          previewLocationTitle.textContent = sheetName;
+          renderRecentPreviewMenu();
+        } catch (_error) {
+          // Cross-origin or browser PDF viewers are not readable from the parent frame.
+        }
+      }
+
+      function referenceForEvidenceLink(link) {
+        const evidenceId = link.dataset.evidenceId;
+        const turnState = link.closest(".assistant-turn")?.__aegisTurn;
+        const reference = evidenceId ? turnState?.evidenceRegistry?.__flat?.[evidenceId] : null;
+        return {
+          ...(reference || {}),
+          href: reference?.href || link.getAttribute("href") || "",
+          source_id: reference?.source_id || link.dataset.sourceKey || "",
+          display_label: reference?.display_label || link.textContent.trim(),
+        };
       }
 
       function evidenceDisplayLabel(reference, evidenceId) {
@@ -3059,6 +3680,7 @@
           requestText: currentUserRequest,
           waitingForUser: false,
         };
+        root.__aegisTurn = activeTurn;
         scrollToBottom();
         return activeTurn;
       }
@@ -3594,7 +4216,16 @@
           return;
         }
 
-        if (link.getAttribute("href") === "#") {
+        const shouldOpenInPreview =
+          event.button === 0 &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.shiftKey &&
+          !event.altKey;
+        if (shouldOpenInPreview) {
+          event.preventDefault();
+          openSourcePreview(referenceForEvidenceLink(link), link);
+        } else if (link.getAttribute("href") === "#") {
           event.preventDefault();
         }
 
@@ -3617,6 +4248,52 @@
           sourceTab.click();
         }
       });
+
+      previewRecentButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const willOpen = previewRecentMenu.hidden;
+        previewRecentMenu.hidden = !willOpen;
+        previewRecentButton.setAttribute("aria-expanded", String(willOpen));
+      });
+
+      previewRecentMenu.addEventListener("click", (event) => {
+        const item = event.target.closest(".preview-recent-item");
+        if (!item) {
+          return;
+        }
+        const index = Number.parseInt(item.dataset.recentIndex || "", 10);
+        const entry = previewState.recent[index];
+        if (!entry) {
+          return;
+        }
+        previewRecentMenu.hidden = true;
+        previewRecentButton.setAttribute("aria-expanded", "false");
+        previewState.current = { ...entry, target: { ...entry.target } };
+        previewState.zoom = 1;
+        rememberPreviewEntry(previewState.current);
+        renderPreviewState({ reload: true });
+      });
+
+      document.addEventListener("click", (event) => {
+        if (event.target.closest(".preview-recent")) {
+          return;
+        }
+        previewRecentMenu.hidden = true;
+        previewRecentButton.setAttribute("aria-expanded", "false");
+      });
+
+      previewPrevious.addEventListener("click", () => navigatePreviewLocation(-1));
+      previewNext.addEventListener("click", () => navigatePreviewLocation(1));
+      previewZoomOut.addEventListener("click", () => setPreviewZoom(-0.1));
+      previewZoomIn.addEventListener("click", () => setPreviewZoom(0.1));
+
+      previewDownload.addEventListener("click", (event) => {
+        if (previewDownload.classList.contains("disabled")) {
+          event.preventDefault();
+        }
+      });
+
+      sourcePreviewFrame.addEventListener("load", syncPreviewLocationFromFrame);
 
       composer.addEventListener("submit", (event) => {
         event.preventDefault();

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
+from urllib.parse import quote
 
 from ...agents.schemas import (
     BankPeriodCombination,
@@ -72,20 +74,66 @@ def _table_from_raw(raw: Dict[str, Any]) -> Optional[ResearchTable]:
     )
 
 
+def _source_document_preview_href(
+    source: str,
+    file_id: Optional[str],
+    file_type: Optional[str],
+    page_number: Optional[int],
+) -> Optional[str]:
+    """Build the local source-document preview URL."""
+    if not file_id:
+        return None
+    href = (
+        f"/source-documents/{quote(source, safe='')}/"
+        f"{quote(file_id, safe='')}/preview"
+    )
+    if page_number:
+        if str(file_type or "").lower() == "xlsx":
+            href = f"{href}#sheet-{page_number}"
+        else:
+            href = f"{href}#page={page_number}"
+    return href
+
+
+def _source_document_download_href(source: str, file_id: Optional[str]) -> Optional[str]:
+    """Build the local source-document original download URL."""
+    if not file_id:
+        return None
+    return (
+        f"/source-documents/{quote(source, safe='')}/"
+        f"{quote(file_id, safe='')}/download"
+    )
+
+
 def _evidence_from_reference(reference: Dict[str, Any]) -> EvidenceReference:
     """Convert retriever source metadata into an evidence reference."""
     location = str(reference.get("location") or reference.get("location_detail") or "").strip()
     filename = str(reference.get("filename") or "").strip() or None
+    file_id = str(reference.get("file_id") or "").strip() or None
+    file_type = (
+        str(reference.get("file_type") or "").strip()
+        or Path(filename or "").suffix.lstrip(".")
+        or None
+    )
     page = reference.get("page") or reference.get("page_number")
     page_number = int(page) if isinstance(page, (int, float)) and page else None
     display = f"Event transcripts {location}".strip() if location else "Event transcripts"
     return EvidenceReference(
         source_id="event_transcripts",
         source_label="Event transcripts",
+        file_id=file_id,
         filename=filename,
+        file_type=file_type,
         page_number=page_number,
         location_label=location or None,
         s3_key=str(reference.get("s3_key") or filename or "").strip() or None,
+        href=_source_document_preview_href(
+            "event_transcripts",
+            file_id,
+            file_type,
+            page_number,
+        ),
+        download_href=_source_document_download_href("event_transcripts", file_id),
         display_label=display,
     )
 

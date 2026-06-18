@@ -90,13 +90,16 @@ class EvidenceReference(BaseModel):
     evidence_id: Optional[str] = None
     source_id: SourceId
     source_label: str
+    file_id: Optional[str] = None
     filename: Optional[str] = None
+    file_type: Optional[str] = None
     page_number: Optional[int] = None
     location_label: Optional[str] = None
     sheet_name: Optional[str] = None
     section_name: Optional[str] = None
     s3_key: Optional[str] = None
     href: Optional[str] = None
+    download_href: Optional[str] = None
     display_label: str
 
 

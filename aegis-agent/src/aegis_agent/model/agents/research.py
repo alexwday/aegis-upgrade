@@ -223,12 +223,25 @@ def _placeholder_s3_base(context: Optional[Dict[str, Any]] = None) -> str:
 
 
 def _build_evidence_href(
+    source: str,
+    file_id: Optional[str],
     s3_key: Optional[str],
     file_type: Optional[str],
     page_number: Optional[int],
     context: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
-    """Build a deterministic placeholder evidence URL."""
+    """Build the browser-preview URL for a source reference."""
+    if file_id:
+        href = (
+            f"/source-documents/{quote(str(source), safe='')}/"
+            f"{quote(str(file_id), safe='')}/preview"
+        )
+        if page_number:
+            if str(file_type or "").lower() == "xlsx":
+                href = f"{href}#sheet-{page_number}"
+            else:
+                href = f"{href}#page={page_number}"
+        return href
     if not s3_key:
         return None
     href = f"{_placeholder_s3_base(context)}/{quote(str(s3_key), safe='/')}"
@@ -237,10 +250,29 @@ def _build_evidence_href(
     return href
 
 
+def _build_download_href(source: str, file_id: Optional[str]) -> Optional[str]:
+    """Build the original-byte download URL for a source document."""
+    if not file_id:
+        return None
+    return (
+        f"/source-documents/{quote(str(source), safe='')}/"
+        f"{quote(str(file_id), safe='')}/download"
+    )
+
+
 def _clean_location(value: Any) -> Optional[str]:
     """Normalize empty source-location fields to None."""
     text_value = str(value or "").strip()
     return text_value or None
+
+
+def _positive_int(value: Any) -> Optional[int]:
+    """Return a positive integer from source metadata when present."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _display_label(
@@ -269,11 +301,12 @@ def _reference_to_evidence(
 ) -> EvidenceReference:
     """Convert retriever source metadata into the canonical evidence contract."""
     source_label = _source_label(source)
+    file_id = _clean_location(reference.get("file_id"))
     filename = _clean_location(reference.get("filename"))
     s3_key = _clean_location(reference.get("s3_key") or filename)
     file_type = _clean_location(reference.get("file_type") or Path(s3_key or "").suffix.lstrip("."))
     raw_page = reference.get("page") or reference.get("page_number")
-    page_number = int(raw_page) if isinstance(raw_page, (int, float)) and raw_page else None
+    page_number = _positive_int(raw_page)
     location_label = _clean_location(reference.get("location") or reference.get("location_detail"))
     sheet_name = _clean_location(reference.get("sheet") or reference.get("sheet_name"))
     section_name = _clean_location(reference.get("section") or reference.get("section_name"))
@@ -288,13 +321,16 @@ def _reference_to_evidence(
     return EvidenceReference(
         source_id=source,  # type: ignore[arg-type]
         source_label=source_label,
+        file_id=file_id,
         filename=filename,
+        file_type=file_type,
         page_number=page_number,
         location_label=location_label,
         sheet_name=sheet_name,
         section_name=section_name,
         s3_key=s3_key,
-        href=_build_evidence_href(s3_key, file_type, page_number, context),
+        href=_build_evidence_href(source, file_id, s3_key, file_type, page_number, context),
+        download_href=_build_download_href(source, file_id),
         display_label=display_label,
     )
 
@@ -674,10 +710,11 @@ async def _record_availability_progress(
         )
 
 
-def _evidence_key(reference: EvidenceReference) -> Tuple[str, str, str, str, str, str]:
+def _evidence_key(reference: EvidenceReference) -> Tuple[str, str, str, str, str, str, str]:
     """Return a stable dedupe key for one evidence reference."""
     return (
         str(reference.source_id),
+        reference.file_id or "",
         reference.s3_key or reference.filename or "",
         str(reference.page_number or ""),
         reference.sheet_name or "",
@@ -689,7 +726,7 @@ def _evidence_key(reference: EvidenceReference) -> Tuple[str, str, str, str, str
 def _assign_evidence_ids(findings: Sequence[Finding]) -> Dict[str, Dict[str, EvidenceReference]]:
     """Assign turn-local E# IDs and build the evidence registry."""
     registry: Dict[str, Dict[str, EvidenceReference]] = {}
-    seen: Dict[Tuple[str, str, str, str, str, str], EvidenceReference] = {}
+    seen: Dict[Tuple[str, str, str, str, str, str, str], EvidenceReference] = {}
     next_id = 1
 
     for finding in findings:

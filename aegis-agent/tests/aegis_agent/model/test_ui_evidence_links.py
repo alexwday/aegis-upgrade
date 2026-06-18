@@ -16,6 +16,55 @@ def test_chat_template_uses_structured_evidence_links() -> None:
     assert "data-evidence-id" in html
 
 
+def test_chat_template_has_source_preview_pane() -> None:
+    """Citation clicks should open the dedicated source preview pane."""
+    template = Path(__file__).resolve().parents[3] / "templates" / "chat.html"
+    html = template.read_text(encoding="utf-8")
+
+    assert 'id="sourcePreview"' in html
+    assert 'id="previewDocumentTitle"' in html
+    assert 'id="previewRecentButton"' in html
+    assert 'id="previewLocationKind"' in html
+    assert 'id="previewPrevious"' in html
+    assert 'id="previewNext"' in html
+    assert 'id="previewZoomOut"' in html
+    assert 'id="previewZoomIn"' in html
+    assert 'id="previewDownload"' in html
+    assert 'id="sourcePreviewFrame"' in html
+    assert "function openSourcePreview" in html
+    assert "function navigatePreviewLocation" in html
+    assert "function setPreviewZoom" in html
+    assert "previewState.recent" in html
+
+
+def test_chat_template_intercepts_citations_for_preview_pane() -> None:
+    """Normal citation clicks should preview in-pane while preserving browser modifiers."""
+    template = Path(__file__).resolve().parents[3] / "templates" / "chat.html"
+    html = template.read_text(encoding="utf-8")
+
+    assert "referenceForEvidenceLink(link)" in html
+    assert "openSourcePreview(referenceForEvidenceLink(link), link)" in html
+    assert "event.metaKey" in html
+    assert "event.ctrlKey" in html
+    assert "root.__aegisTurn = activeTurn" in html
+    assert "/download" in html
+    assert "return `sheet-${targetNumber}`" in html
+    assert "return `page=${targetNumber}&zoom=${zoom}`" in html
+
+
+def test_fastapi_exposes_source_document_byte_routes() -> None:
+    """The agent server should stream preview bytes and original downloads."""
+    app = Path(__file__).resolve().parents[3] / "run_fastapi.py"
+    source = app.read_text(encoding="utf-8")
+
+    assert '@app.get("/source-documents/{source}/{file_id}/preview")' in source
+    assert '@app.get("/source-documents/{source}/{file_id}/download")' in source
+    assert "preview_bytes" in source
+    assert "original_bytes" in source
+    assert 'Content-Disposition": f\'inline; filename="' in source
+    assert 'Content-Disposition": f\'attachment; filename="' in source
+
+
 def test_chat_template_uses_declared_final_response_shell() -> None:
     """The UI should render the agent-declared shell instead of inferring layout."""
     template = Path(__file__).resolve().parents[3] / "templates" / "chat.html"
