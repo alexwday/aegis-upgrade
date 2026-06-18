@@ -1,8 +1,7 @@
 """Create token-counted chunks from extracted transcript artifacts.
 
-This stage runs after XML extraction. Transcript extraction emits page-shaped
-records for downstream compatibility, where each "page" is one transcript unit:
-a management speaker block or a grouped Q&A exchange.
+This stage runs after XML extraction. Transcript extraction emits real
+generated-PDF page records, so chunk page numbers align with preview links.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ DEFAULT_TRUNCATION_TOKEN_LIMIT: int | None = None
 TOKEN_TIER_LOW_MAX = 5_000
 TOKEN_TIER_MEDIUM_MAX = 10_000
 EMBEDDING_FORMAT_VERSION = "row_column_values_v1"
-PAGE_EMBEDDING_FORMAT_VERSION = "transcript_unit_markdown_v1"
+PAGE_EMBEDDING_FORMAT_VERSION = "transcript_pdf_page_markdown_v1"
 MANIFEST_FIELDS = (
     "file_id",
     "data_source",
@@ -77,7 +76,7 @@ class TokenizerContext:
 
 @dataclass(frozen=True)
 class ContentChunk:
-    """One extracted transcript unit prepared for embedding and retrieval."""
+    """One extracted transcript page prepared for embedding and retrieval."""
 
     source: dict[str, Any]
     source_workbook_artifact_path: str
@@ -174,7 +173,7 @@ def run_chunking_stage(
     max_files: int | None = None,
     max_sheets_per_file: int | None = None,
 ) -> ChunkingStageResult:
-    """Create one chunk artifact per extracted transcript unit.
+    """Create one chunk artifact per extracted transcript page.
 
     Args:
         progress_dir: Folder containing manifest progress and artifacts.
@@ -184,7 +183,7 @@ def run_chunking_stage(
             content. By default, page/sheet content is not truncated; only
             embedding content is token-budgeted.
         max_files: Optional file limit for deterministic smoke checks.
-        max_sheets_per_file: Optional per-file transcript-unit limit for smoke checks.
+        max_sheets_per_file: Optional per-file transcript-page limit for smoke checks.
 
     Returns:
         ChunkingStageResult with artifact paths and total chunk count.
@@ -346,11 +345,11 @@ def build_embedding_content(sheet_payload: dict[str, Any]) -> str:
 
 
 def build_page_embedding_content(page_payload: dict[str, Any]) -> str:
-    """Build compact embedding text for one extracted transcript unit."""
+    """Build compact embedding text for one generated transcript PDF page."""
     page_number = int(page_payload.get("page_number", 0) or 0)
     markdown = str(page_payload.get("markdown", "")).strip()
-    title = _markdown_title(markdown) or f"Transcript unit {page_number}"
-    lines = [f"Transcript unit: {page_number}", f"Title: {title}", "Markdown:"]
+    title = _markdown_title(markdown) or f"Transcript page {page_number}"
+    lines = [f"Transcript page: {page_number}", f"Title: {title}", "Markdown:"]
     lines.append(markdown if markdown else "(empty)")
     return "\n".join(lines)
 
@@ -477,7 +476,7 @@ def _chunk_extracted_document(
     truncation_token_limit: int | None,
     max_sheets: int | None,
 ) -> list[ContentChunk]:
-    """Create one chunk per transcript unit from one extraction artifact."""
+    """Create one chunk per transcript page from one extraction artifact."""
     sheets = extraction.get("sheets")
     if isinstance(sheets, list):
         if max_sheets is not None:
@@ -585,7 +584,7 @@ def _chunk_page(
     embedding_token_limit: int,
     truncation_token_limit: int | None,
 ) -> ContentChunk:
-    """Create the one-chunk representation of a transcript unit."""
+    """Create the one-chunk representation of a generated transcript PDF page."""
     content = str(page_payload.get("markdown", ""))
     source_content_token_count = count_tokens(content, tokenizer)
     was_truncated = (
@@ -608,7 +607,7 @@ def _chunk_page(
     )
     embedding_token_count = count_tokens(embedding_content, tokenizer)
     page_number = int(page_payload["page_number"])
-    page_title = _markdown_title(content) or f"Transcript unit {page_number}"
+    page_title = _markdown_title(content) or f"Transcript page {page_number}"
     return ContentChunk(
         source=source,
         source_workbook_artifact_path=str(extraction_path),
@@ -618,7 +617,7 @@ def _chunk_page(
         sheet_title=page_title,
         chunk_id=f"page_{page_number}.1",
         chunk_index=1,
-        chunk_context=f"Transcript unit {page_number}",
+        chunk_context=f"Transcript page {page_number}",
         content=content,
         embedding_content=embedding_content,
         embedding_format=PAGE_EMBEDDING_FORMAT_VERSION,
@@ -634,7 +633,7 @@ def _chunk_page(
         token_tier=classify_token_tier(embedding_token_count),
         was_chunked=False,
         was_truncated=was_truncated,
-        chunking_strategy="single_transcript_unit_markdown_embedding",
+        chunking_strategy="single_transcript_pdf_page_markdown_embedding",
         item_type="page",
         markdown_path=_page_markdown_path(page_payload),
     )
@@ -653,7 +652,7 @@ def _read_sheet_payload(sheet_index_record: Any) -> dict[str, Any]:
 
 
 def _read_page_payload(page_index_record: Any) -> dict[str, Any]:
-    """Read one extraction transcript-unit JSON payload."""
+    """Read one extraction transcript-page JSON payload."""
     if not isinstance(page_index_record, dict):
         raise ChunkingStageError("Extraction page index record is not an object")
     path = _resolve_artifact_path(str(page_index_record.get("page_json_path", "")))
@@ -689,7 +688,7 @@ def _sheet_artifact_path(sheet_payload: dict[str, Any]) -> str:
 
 
 def _page_artifact_path(page_payload: dict[str, Any]) -> str:
-    """Return the source transcript-unit artifact path recorded in the payload."""
+    """Return the source transcript-page artifact path recorded in the payload."""
     source_path = page_payload.get("source_page_artifact_path")
     if source_path:
         return str(source_path)
@@ -697,7 +696,7 @@ def _page_artifact_path(page_payload: dict[str, Any]) -> str:
 
 
 def _page_markdown_path(page_payload: dict[str, Any]) -> str:
-    """Return the source transcript-unit markdown path recorded in the payload."""
+    """Return the source transcript-page markdown path recorded in the payload."""
     markdown_path = page_payload.get("source_page_markdown_path")
     if markdown_path:
         return str(markdown_path)
@@ -829,7 +828,7 @@ def _page_records(
     chunk_records: list[dict[str, Any]],
     extraction: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Build one summary record per extracted transcript unit."""
+    """Build one summary record per extracted transcript page."""
     return [
         item
         for item in _item_records(chunk_records, extraction)

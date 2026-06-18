@@ -23,7 +23,6 @@ if str(AEGIS_PIPELINE_ROOT) not in sys.path:
     sys.path.insert(0, str(AEGIS_PIPELINE_ROOT))
 
 from utils.source_document_previews import (  # noqa: E402
-    PDF_MIME_TYPE,
     PREVIEW_RENDERER_VERSION,
     build_source_document_preview,
     preview_error_metadata,
@@ -280,13 +279,14 @@ def load_candidates(
             """
             AND (
                 preview_bytes IS NULL
-             OR preview_mime_type IS DISTINCT FROM %s
+             OR preview_mime_type IS NULL
+             OR preview_mime_type = ''
              OR coalesce(preview_metadata->>'renderer_version', '') <> %s
              OR preview_error IS NOT NULL
             )
             """
         )
-        params.extend([PDF_MIME_TYPE, PREVIEW_RENDERER_VERSION])
+        params.append(PREVIEW_RENDERER_VERSION)
 
     limit_sql = sql.SQL("")
     if limit is not None:

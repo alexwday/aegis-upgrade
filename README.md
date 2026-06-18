@@ -161,16 +161,28 @@ After syncing source tables, refresh the agent availability preflight table:
 
 ## Backfill Source Document Previews
 
-Existing databases need one preview migration/backfill before preview links can
-open XLSX sheet PDFs and XML transcript PDFs from Postgres:
+Existing databases need transcript rows regenerated and one preview
+migration/backfill before preview links are aligned with the new preview model.
+Re-run the sources whose page model changed:
 
 ```bash
-.venv/bin/python scripts/backfill_source_document_previews.py --all --apply
+.venv/bin/python scripts/run_pipeline.py --source supplementary_financials
+.venv/bin/python scripts/run_pipeline.py --source pillar3
+.venv/bin/python scripts/run_pipeline.py --source transcripts
+.venv/bin/python scripts/run_pipeline.py --source event_transcripts
 ```
 
-XLSX preview generation uses LibreOffice headless (`soffice`) during the
-pipeline/backfill step to render formatted sheet PDFs. The preview UI only
-reads the generated PDF bytes from Postgres.
+Then refresh stored previews:
+
+```bash
+.venv/bin/python scripts/backfill_source_document_previews.py --all --apply --force
+```
+
+PDF sources store the original PDF as the preview. XLSX sources store a
+generated HTML workbook preview where visible sheet `N` opens at `#sheet-N`.
+XML transcript sources store a generated transcript PDF where references open
+at `#page=N`. The preview UI only reads generated `preview_bytes` from
+Postgres.
 
 ## Test Source Document Preview Links
 

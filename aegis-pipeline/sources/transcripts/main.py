@@ -36,7 +36,7 @@ def main() -> int:
     # Stage 3: FactSet XML transcript extraction artifacts.
     run_extraction_stage()
 
-    # Stage 4: token-counted transcript-unit chunk artifacts.
+    # Stage 4: token-counted transcript-page chunk artifacts.
     run_chunking_stage()
 
     # Stage 5: LLM enrichment artifacts.

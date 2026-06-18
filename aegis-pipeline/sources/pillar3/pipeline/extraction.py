@@ -196,6 +196,7 @@ class ExtractedXlsxSheet:
     """One extracted workbook sheet."""
 
     sheet_number: int
+    workbook_sheet_number: int
     title: str
     is_chartsheet: bool
     cell_grid: XlsxCellGrid | None
@@ -210,6 +211,7 @@ class ExtractedXlsxSheet:
         """Return the sheet content and metadata as a JSON record."""
         return {
             "sheet_number": self.sheet_number,
+            "workbook_sheet_number": self.workbook_sheet_number,
             "title": self.title,
             "is_chartsheet": self.is_chartsheet,
             "cell_grid": (
@@ -291,6 +293,7 @@ class _PreReadSheet:
     """Openpyxl-derived sheet data made safe for worker threads."""
 
     sheet_number: int
+    workbook_sheet_number: int
     title: str
     is_chartsheet: bool
     cell_grid: XlsxCellGrid | None
@@ -401,7 +404,9 @@ def extract_xlsx_workbook(
     return ExtractedXlsxWorkbook(
         sheets=sheets,
         source_sheet_count=source_sheet_count,
-        selected_sheet_numbers=[sheet_number for sheet_number, _name in sheet_items],
+        selected_sheet_numbers=[
+            sheet_number for sheet_number, _workbook_sheet_number, _name in sheet_items
+        ],
         skipped_sheets=skipped_sheets,
     )
 
@@ -472,6 +477,7 @@ def _write_sheet_json(
     _write_json(sheet_json_path, payload)
     return {
         "sheet_number": sheet.sheet_number,
+        "workbook_sheet_number": sheet.workbook_sheet_number,
         "sheet_title": sheet.title,
         "sheet_json_path": str(sheet_json_path),
         "row_count": len(sheet.cell_grid.rows) if sheet.cell_grid is not None else 0,
@@ -567,17 +573,17 @@ def _load_openpyxl() -> Callable[..., Any]:
 def _select_sheet_items(
     workbook: Any,
     max_sheets: int | None,
-) -> tuple[list[tuple[int, str]], list[SkippedXlsxSheet]]:
+) -> tuple[list[tuple[int, int, str]], list[SkippedXlsxSheet]]:
     """Return visible sheets selected for extraction and skipped metadata."""
     visible_sheets = []
     skipped_sheets = []
-    for sheet_number, sheet_name in enumerate(workbook.sheetnames, start=1):
+    for workbook_sheet_number, sheet_name in enumerate(workbook.sheetnames, start=1):
         sheet = workbook[sheet_name]
         sheet_state = str(getattr(sheet, "sheet_state", "visible"))
         if sheet_state != "visible":
             skipped_sheets.append(
                 SkippedXlsxSheet(
-                    sheet_number=sheet_number,
+                    sheet_number=workbook_sheet_number,
                     title=sheet.title,
                     sheet_state=sheet_state,
                     reason="hidden_sheet",
@@ -587,25 +593,26 @@ def _select_sheet_items(
         if max_sheets is not None and len(visible_sheets) >= max_sheets:
             skipped_sheets.append(
                 SkippedXlsxSheet(
-                    sheet_number=sheet_number,
+                    sheet_number=workbook_sheet_number,
                     title=sheet.title,
                     sheet_state=sheet_state,
                     reason="max_sheets_limit",
                 )
             )
             continue
-        visible_sheets.append((sheet_number, sheet_name))
+        visible_sheet_number = len(visible_sheets) + 1
+        visible_sheets.append((visible_sheet_number, workbook_sheet_number, sheet_name))
     return visible_sheets, skipped_sheets
 
 
 def _preread_selected_sheets(
     workbook: Any,
     cached_workbook: Any,
-    sheet_items: list[tuple[int, str]],
+    sheet_items: list[tuple[int, int, str]],
 ) -> list[_PreReadSheet]:
     """Extract selected openpyxl sheet data into plain Python records."""
     preread = []
-    for sheet_number, sheet_name in sheet_items:
+    for sheet_number, workbook_sheet_number, sheet_name in sheet_items:
         sheet = workbook[sheet_name]
         is_chartsheet = _is_chartsheet(sheet)
         cached_values = (
@@ -624,11 +631,16 @@ def _preread_selected_sheets(
         preread.append(
             _PreReadSheet(
                 sheet_number=sheet_number,
+                workbook_sheet_number=workbook_sheet_number,
                 title=sheet.title,
                 is_chartsheet=is_chartsheet,
                 cell_grid=cell_extraction.cell_grid,
                 charts=_extract_charts(sheet, workbook, cached_workbook),
-                metadata=_extract_sheet_metadata(sheet, cell_extraction.cell_grid),
+                metadata={
+                    **_extract_sheet_metadata(sheet, cell_extraction.cell_grid),
+                    "visible_sheet_number": sheet_number,
+                    "workbook_sheet_number": workbook_sheet_number,
+                },
                 merged_ranges=merged_ranges,
                 formula_stats=cell_extraction.formula_stats.to_record(),
             )
@@ -667,6 +679,7 @@ def _process_one_sheet(sheet: _PreReadSheet) -> ExtractedXlsxSheet:
     )
     return ExtractedXlsxSheet(
         sheet_number=sheet.sheet_number,
+        workbook_sheet_number=sheet.workbook_sheet_number,
         title=sheet.title,
         is_chartsheet=sheet.is_chartsheet,
         cell_grid=sheet.cell_grid,

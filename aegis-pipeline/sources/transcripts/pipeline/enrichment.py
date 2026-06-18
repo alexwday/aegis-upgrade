@@ -1,8 +1,8 @@
 """Enrich transcript chunks with metadata, keywords, metrics, and summaries.
 
 This stage mirrors Aegis Retriever Stage 5 for processed document sources. It
-loads the transcript chunking artifacts, treats every transcript unit as one
-content unit and one section, then performs document metadata, content
+loads the transcript chunking artifacts, treats every generated transcript PDF
+page as one content unit and one section, then performs document metadata, content
 keyword/metric extraction, and section summary calls.
 """
 
@@ -1026,7 +1026,7 @@ def _format_content_batch(
             f'item_number="{unit.item_number}"',
         ]
         if _is_transcript_source(unit.source):
-            attrs.append(f'transcript_unit="{unit.item_number}"')
+            attrs.append(f'page="{unit.item_number}"')
         elif unit.item_type == "page" or unit.filetype == "pdf":
             attrs.append(f'page="{unit.item_number}"')
         elif unit.item_type == "sheet" or unit.filetype == "xlsx":
@@ -1078,9 +1078,7 @@ def _build_file_metadata(document: EnrichmentDocument) -> str:
         f"item_types: {', '.join(item_types) if item_types else 'unknown'}",
         f"total_items: {len(item_numbers)}",
     ]
-    if primary_item_label == "Transcript unit":
-        lines.append(f"total_transcript_units: {len(item_numbers)}")
-    elif primary_item_label == "Page":
+    if primary_item_label == "Page":
         lines.append(f"total_pages: {len(item_numbers)}")
     elif primary_item_label == "Sheet":
         lines.append(f"total_sheets: {len(item_numbers)}")
@@ -1108,7 +1106,7 @@ def _build_page_names(document: EnrichmentDocument) -> str:
 def _document_item_label(document: EnrichmentDocument) -> str:
     """Return the dominant source item label for a document."""
     if _is_transcript_source(document.source):
-        return "Transcript unit"
+        return "Page"
     if document.filetype == "pdf":
         return "Page"
     if document.filetype == "xlsx":
@@ -1123,7 +1121,7 @@ def _document_item_label(document: EnrichmentDocument) -> str:
 def _unit_item_label(unit: EnrichedContentUnit) -> str:
     """Return a display label for one unit's source item type."""
     if _is_transcript_source(unit.source):
-        return "Transcript unit"
+        return "Page"
     item_type = unit.item_type.strip().lower()
     if item_type == "page" or unit.filetype == "pdf":
         return "Page"

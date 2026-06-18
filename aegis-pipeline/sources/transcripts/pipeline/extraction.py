@@ -14,6 +14,10 @@ from typing import Any
 from utils.config_setup import get_input_source_config, load_config
 from utils.logging_setup import get_stage_logger
 from utils.qa import finding_records, qa_counts, qa_status
+from utils.source_document_previews import (
+    TranscriptPreviewPage,
+    build_transcript_preview_document,
+)
 from .manifest import (
     ARTIFACTS_DIR_NAME,
     FILES_TO_PROCESS_FILE_NAME,
@@ -106,7 +110,7 @@ class TranscriptDocument:
 
 @dataclass(frozen=True)
 class ExtractedTranscriptUnit:
-    """A transcript unit exposed to downstream chunking as a page-like item."""
+    """One generated transcript PDF page exposed to downstream chunking."""
 
     unit_number: int
     unit_id: str
@@ -121,7 +125,7 @@ class ExtractedTranscriptUnit:
 
 @dataclass(frozen=True)
 class ExtractedTranscriptDocument:
-    """Extracted transcript units plus source-level metadata."""
+    """Generated transcript PDF pages plus source-level metadata."""
 
     units: list[ExtractedTranscriptUnit]
     source_unit_count: int
@@ -129,6 +133,8 @@ class ExtractedTranscriptDocument:
     title: str
     transcript_date: str
     companies: list[str]
+    generated_pdf_bytes: bytes
+    preview_metadata: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -138,6 +144,7 @@ class TranscriptDocumentArtifacts:
     artifact_root: Path
     document_json: Path
     document_markdown: Path
+    generated_pdf_path: Path
     unit_count: int
     source_unit_count: int
     selected_unit_numbers: tuple[int, ...]
@@ -170,8 +177,8 @@ def run_extraction_stage(
     Args:
         input_base_path: Optional local transcripts input folder override.
         progress_dir: Folder containing manifest progress files and artifacts.
-        max_pages: Optional first-N transcript-unit limit for smoke runs.
-        page_numbers: Optional one-indexed transcript unit numbers to emit.
+        max_pages: Optional first-N generated transcript PDF page limit for smoke runs.
+        page_numbers: Optional one-indexed generated PDF page numbers to emit.
         llm_client: Accepted for API compatibility; not used by XML extraction.
 
     Returns:
@@ -239,9 +246,14 @@ def extract_transcript_document(
     max_units: int | None = None,
     unit_numbers: list[int] | tuple[int, ...] | None = None,
 ) -> ExtractedTranscriptDocument:
-    """Parse a FactSet XML file and return downstream-ready transcript units."""
-    parsed = parse_factset_transcript(xml_path)
-    units = build_transcript_units(parsed)
+    """Render a FactSet XML transcript PDF and return page-aligned records."""
+    preview_document = build_transcript_preview_document(
+        original_bytes=xml_path.read_bytes(),
+        filename=xml_path.name,
+    )
+    units = [
+        _extracted_unit_from_preview_page(page) for page in preview_document.pages
+    ]
     selected_numbers = _selected_unit_numbers(len(units), max_units, unit_numbers)
     selected_units = [
         unit for unit in units if unit.unit_number in set(selected_numbers)
@@ -250,9 +262,27 @@ def extract_transcript_document(
         units=selected_units,
         source_unit_count=len(units),
         selected_unit_numbers=selected_numbers,
-        title=parsed.title,
-        transcript_date=parsed.transcript_date,
-        companies=parsed.companies,
+        title=preview_document.title,
+        transcript_date=preview_document.transcript_date,
+        companies=preview_document.companies,
+        generated_pdf_bytes=preview_document.preview.preview_bytes,
+        preview_metadata=preview_document.preview.preview_metadata,
+    )
+
+
+def _extracted_unit_from_preview_page(
+    page: TranscriptPreviewPage,
+) -> ExtractedTranscriptUnit:
+    """Convert one rendered transcript PDF page into extraction payload shape."""
+    return ExtractedTranscriptUnit(
+        unit_number=page.page_number,
+        unit_id=f"page_{page.page_number}",
+        unit_type="transcript_pdf_page",
+        title=page.title or f"Transcript page {page.page_number}",
+        markdown=page.markdown,
+        section_name=page.section_name,
+        speaker_block_ids=page.speaker_block_ids,
+        speakers=page.speakers,
     )
 
 
@@ -288,50 +318,6 @@ def parse_factset_transcript(xml_path: Path) -> TranscriptDocument:
         companies=companies,
         blocks=blocks,
     )
-
-
-def build_transcript_units(
-    document: TranscriptDocument,
-) -> list[ExtractedTranscriptUnit]:
-    """Build retrieval units from parsed speaker blocks."""
-    units: list[ExtractedTranscriptUnit] = []
-    unit_number = 1
-
-    for block in document.blocks:
-        if block.section_name != SECTION_MD:
-            continue
-        units.append(
-            ExtractedTranscriptUnit(
-                unit_number=unit_number,
-                unit_id=f"md_block_{block.speaker_block_id}",
-                unit_type="management_discussion",
-                title=f"Management Discussion: {block.speaker_name}",
-                markdown=_markdown_for_md_block(block),
-                section_name=block.section_name,
-                speaker_block_ids=[block.speaker_block_id],
-                speakers=[_speaker_record(block)],
-            )
-        )
-        unit_number += 1
-
-    for qa_group_id, qa_blocks in enumerate(_qa_groups(document.blocks), start=1):
-        title_speaker = _qa_title_speaker(qa_blocks)
-        units.append(
-            ExtractedTranscriptUnit(
-                unit_number=unit_number,
-                unit_id=f"qa_group_{qa_group_id}",
-                unit_type="qa_exchange",
-                title=f"Q&A Exchange {qa_group_id}: {title_speaker}",
-                markdown=_markdown_for_qa_group(qa_group_id, qa_blocks),
-                section_name=SECTION_QA,
-                speaker_block_ids=[block.speaker_block_id for block in qa_blocks],
-                qa_group_id=qa_group_id,
-                speakers=[_speaker_record(block) for block in qa_blocks],
-            )
-        )
-        unit_number += 1
-
-    return units
 
 
 def write_document_artifact(
@@ -373,6 +359,8 @@ def write_transcript_document_artifacts(
     """Write inspectable JSON and markdown artifacts for one transcript XML."""
     extraction_root.mkdir(parents=True, exist_ok=True)
     source = _source_record(record, source_path)
+    generated_pdf_path = extraction_root / "generated_transcript.pdf"
+    generated_pdf_path.write_bytes(document.generated_pdf_bytes)
     unit_records, document_markdown = _write_document_outputs(
         source=source,
         document=document,
@@ -399,7 +387,8 @@ def write_transcript_document_artifacts(
     document_json = extraction_root / DOCUMENT_ARTIFACT_FILE_NAME
     payload = {
         "stage": "extraction",
-        "extraction_type": "factset_transcript_xml",
+        "extraction_type": "factset_transcript_pdf_pages",
+        "page_model": "generated_transcript_pdf_pages",
         "processed_at": processed_at,
         "file_started_at": file_started_at or processed_at,
         "file_completed_at": file_completed_at or processed_at,
@@ -408,6 +397,8 @@ def write_transcript_document_artifacts(
         "transcript_title": document.title,
         "transcript_date": document.transcript_date,
         "companies": document.companies,
+        "generated_transcript_pdf_path": str(generated_pdf_path),
+        "preview_metadata": document.preview_metadata,
         "page_count": len(document.units),
         "unit_count": len(document.units),
         "source_page_count": document.source_unit_count,
@@ -430,6 +421,7 @@ def write_transcript_document_artifacts(
         artifact_root=extraction_root,
         document_json=document_json,
         document_markdown=document_markdown,
+        generated_pdf_path=generated_pdf_path,
         unit_count=len(document.units),
         source_unit_count=document.source_unit_count,
         selected_unit_numbers=tuple(document.selected_unit_numbers),
@@ -444,7 +436,7 @@ def _write_document_outputs(
     artifact_root: Path,
     processed_at: str,
 ) -> tuple[list[dict[str, Any]], Path]:
-    """Write unit-level outputs and the recombined transcript markdown."""
+    """Write page-level outputs and the recombined transcript markdown."""
     unit_records = []
     document_parts = [
         f"# {document.title or source['file_name']}",
@@ -472,8 +464,8 @@ def _write_unit_artifacts(
     artifact_root: Path,
     processed_at: str,
 ) -> dict[str, Any]:
-    """Write artifacts for one transcript unit and return its index record."""
-    unit_label = f"unit_{unit.unit_number:03d}"
+    """Write artifacts for one generated transcript page and return its record."""
+    unit_label = f"page_{unit.unit_number:03d}"
     unit_json = artifact_root / "pages" / f"{unit_label}.json"
     base_markdown = artifact_root / "base_markdown" / f"{unit_label}.md"
     markdown = artifact_root / "markdown" / f"{unit_label}.md"
@@ -487,6 +479,8 @@ def _write_unit_artifacts(
     page_record = {
         "page_number": unit.unit_number,
         "unit_number": unit.unit_number,
+        "page_id": unit.unit_id,
+        "page_type": unit.unit_type,
         "unit_id": unit.unit_id,
         "unit_type": unit.unit_type,
         "title": unit.title,
@@ -514,7 +508,7 @@ def _write_unit_artifacts(
             "page_number": unit.unit_number,
             "unit_number": unit.unit_number,
             "page_text_markdown": final_markdown,
-            "rationale": "FactSet XML text parsed directly.",
+            "rationale": "FactSet XML rendered into a page-aligned transcript PDF.",
         },
     )
     _write_json(
@@ -525,6 +519,8 @@ def _write_unit_artifacts(
             "source": source,
             "page_number": unit.unit_number,
             "unit_number": unit.unit_number,
+            "page_id": unit.unit_id,
+            "page_type": unit.unit_type,
             "unit_id": unit.unit_id,
             "unit_type": unit.unit_type,
             "title": unit.title,
@@ -558,6 +554,9 @@ def _write_extraction_manifest(
                 extraction_root / DOCUMENT_ARTIFACT_FILE_NAME
             ),
             "document_markdown_path": payload["document_markdown_path"],
+            "generated_transcript_pdf_path": payload[
+                "generated_transcript_pdf_path"
+            ],
             "page_count": payload["page_count"],
             "unit_count": payload["unit_count"],
             "source_unit_count": payload["source_unit_count"],
@@ -790,7 +789,7 @@ def _selected_unit_numbers(
     max_units: int | None,
     unit_numbers: list[int] | tuple[int, ...] | None,
 ) -> list[int]:
-    """Resolve selected one-indexed transcript unit numbers."""
+    """Resolve selected one-indexed generated transcript PDF page numbers."""
     if unit_numbers:
         selected = sorted({int(unit_number) for unit_number in unit_numbers})
         invalid = [
@@ -800,7 +799,7 @@ def _selected_unit_numbers(
         ]
         if invalid:
             raise ExtractionStageError(
-                f"Selected transcript unit number(s) out of range: {invalid}"
+                f"Selected transcript page number(s) out of range: {invalid}"
             )
         return selected
     upper = min(total_units, max_units) if max_units is not None else total_units

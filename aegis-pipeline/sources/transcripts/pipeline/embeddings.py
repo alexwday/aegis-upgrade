@@ -973,9 +973,9 @@ def _unit_type(unit: EnrichedContentUnit) -> str:
     if unit.filetype == "pdf":
         return "pdf_page" if _is_full_unit(unit) else "pdf_chunk"
     if unit.filetype == "xml" and unit.item_type == "page":
-        return "transcript_unit"
+        return "transcript_page"
     if unit.filetype == "xml":
-        return "transcript_unit" if _is_full_unit(unit) else "transcript_chunk"
+        return "transcript_page" if _is_full_unit(unit) else "transcript_chunk"
     return unit.item_type or unit.filetype
 
 

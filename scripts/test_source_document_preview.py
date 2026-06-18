@@ -32,6 +32,7 @@ DOCUMENTS_TABLE = "aegis_source_documents"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 PDF_MIME_TYPE = "application/pdf"
+HTML_MIME_PREFIX = "text/html"
 
 
 class PreviewUnavailableError(RuntimeError):
@@ -526,14 +527,23 @@ def build_preview_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             "Preview generation previously failed for this document: "
             f"{preview_error}"
         )
-    if preview_mime_type != PDF_MIME_TYPE or not preview_content:
+    if not preview_mime_type or not preview_content:
         raise PreviewUnavailableError(
             "Preview bytes are missing. Run "
-            "scripts/backfill_source_document_previews.py --all --apply."
+            "scripts/backfill_source_document_previews.py --all --apply --force."
+        )
+    normalized_mime = preview_mime_type.lower()
+    if normalized_mime == PDF_MIME_TYPE:
+        preview_filename = pdf_filename(filename)
+    elif normalized_mime.startswith(HTML_MIME_PREFIX):
+        preview_filename = html_filename(filename)
+    else:
+        raise PreviewUnavailableError(
+            f"Unsupported preview MIME type: {preview_mime_type}"
         )
     return {
-        "filename": pdf_filename(filename),
-        "mime_type": PDF_MIME_TYPE,
+        "filename": preview_filename,
+        "mime_type": preview_mime_type,
         "content": preview_content,
     }
 
@@ -655,14 +665,16 @@ def render_preview(
     doc_src = preview_document_url(reference, page_number=page_number)
     original_src = document_url(reference)
     page_text = str(page_number) if page_number is not None else "none"
-    if requested_sheet:
-        locator_text = f"sheet {requested_sheet} -> preview page {page_text}"
+    file_type = reference.file_type.lower()
+    if file_type == "xlsx":
+        locator_text = f"sheet {page_text}"
+        if reference.chunk_name:
+            locator_text += f" - {reference.chunk_name}"
     elif reference.file_type.lower() == "xml":
-        unit_number = requested_page or reference.page_number
-        unit_text = str(unit_number) if unit_number is not None else "none"
-        locator_text = f"unit {unit_text} -> preview page {page_text}"
+        locator_text = f"preview page {page_text}"
     else:
         locator_text = f"preview page {page_text}"
+    preview_label = "Open HTML preview" if file_type == "xlsx" else "Open PDF preview"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -678,7 +690,7 @@ def render_preview(
       <span>{escape(reference.source_label)} &middot; {escape(locator_text)}</span>
     </div>
     <a class="button secondary" href="{escape(doc_src, quote=True)}" target="_blank">
-      Open PDF preview
+      {escape(preview_label)}
     </a>
     <a class="button secondary" href="{escape(original_src, quote=True)}" target="_blank">
       Download original
@@ -917,9 +929,7 @@ def reference_url(ref: Reference) -> str:
         f"/preview/{quote(ref.source_key, safe='')}/{quote(ref.file_id, safe='')}"
         f"?chunk_id={quote(ref.chunk_id, safe='')}"
     )
-    if ref.file_type.lower() == "xlsx" and ref.chunk_name:
-        url += f"&sheet={quote(ref.chunk_name, safe='')}"
-    elif ref.page_number is not None:
+    if ref.page_number is not None:
         url += f"&page={ref.page_number}"
     return url
 
@@ -941,7 +951,10 @@ def preview_document_url(ref: Reference, page_number: int | None = None) -> str:
     )
     resolved_page = page_number if page_number is not None else ref.page_number
     if resolved_page is not None:
-        url += f"#page={resolved_page}"
+        if ref.file_type.lower() == "xlsx":
+            url += f"#sheet-{resolved_page}"
+        else:
+            url += f"#page={resolved_page}"
     return url
 
 
@@ -951,7 +964,7 @@ def resolve_reference_page(
     requested_page: int | None,
     requested_sheet: str,
 ) -> int | None:
-    """Resolve the preview PDF page for page- or sheet-based references."""
+    """Resolve the preview page/sheet target for page- or sheet-based references."""
     file_type = ref.file_type.lower()
     sheet_name = requested_sheet or (
         ref.chunk_name if file_type == "xlsx" else ""
@@ -960,14 +973,6 @@ def resolve_reference_page(
         sheet_page = preview_page_for_sheet(ref.preview_metadata, sheet_name)
         if sheet_page is not None:
             return sheet_page
-    if file_type == "xml":
-        unit_number = requested_page or ref.page_number
-        unit_page = preview_page_for_transcript_unit(
-            ref.preview_metadata,
-            unit_number,
-        )
-        if unit_page is not None:
-            return unit_page
     return requested_page or ref.page_number
 
 
@@ -975,7 +980,7 @@ def preview_page_for_sheet(
     preview_metadata: Mapping[str, Any],
     sheet_name: str,
 ) -> int | None:
-    """Return the generated preview page for an XLSX sheet name."""
+    """Return the generated visible-sheet page number for an XLSX sheet name."""
     requested = sheet_name.casefold()
     for sheet in preview_metadata.get("sheets", []):
         if not isinstance(sheet, Mapping):
@@ -983,25 +988,10 @@ def preview_page_for_sheet(
         if str(sheet.get("name", "")).casefold() != requested:
             continue
         return parse_page_number(
-            sheet.get("preview_start_page") or sheet.get("preview_page")
-        )
-    return None
-
-
-def preview_page_for_transcript_unit(
-    preview_metadata: Mapping[str, Any],
-    unit_number: int | None,
-) -> int | None:
-    """Return the generated preview page for an XML transcript unit."""
-    if unit_number is None:
-        return None
-    for unit in preview_metadata.get("units", []):
-        if not isinstance(unit, Mapping):
-            continue
-        if parse_page_number(unit.get("unit_number")) != unit_number:
-            continue
-        return parse_page_number(
-            unit.get("preview_start_page") or unit.get("preview_page")
+            sheet.get("page_number")
+            or sheet.get("visible_sheet_number")
+            or sheet.get("preview_page")
+            or sheet.get("preview_start_page")
         )
     return None
 
@@ -1009,10 +999,13 @@ def preview_page_for_transcript_unit(
 def reference_locator(ref: Reference) -> tuple[str, str]:
     """Return a compact label/value for the sampled reference target."""
     if ref.file_type.lower() == "xlsx":
-        return "Sheet", ref.chunk_name or "none"
+        page_label = str(ref.page_number) if ref.page_number is not None else "none"
+        if ref.chunk_name:
+            page_label += f" - {ref.chunk_name}"
+        return "Sheet", page_label
     if ref.file_type.lower() == "xml":
-        unit_label = str(ref.page_number) if ref.page_number is not None else "none"
-        return "Unit", unit_label
+        page_label = str(ref.page_number) if ref.page_number is not None else "none"
+        return "Page", page_label
     page_label = str(ref.page_number) if ref.page_number is not None else "none"
     return "Page", page_label
 
@@ -1055,6 +1048,11 @@ def safe_header_filename(filename: str) -> str:
 def pdf_filename(filename: str) -> str:
     """Return a safe PDF preview filename."""
     return safe_header_filename(str(Path(filename).with_suffix(".pdf")))
+
+
+def html_filename(filename: str) -> str:
+    """Return a safe HTML preview filename."""
+    return safe_header_filename(str(Path(filename).with_suffix(".html")))
 
 
 def escape(value: Any, quote: bool = True) -> str:
