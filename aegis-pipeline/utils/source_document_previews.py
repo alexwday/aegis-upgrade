@@ -10,6 +10,7 @@ import tempfile
 import textwrap
 import warnings
 import xml.etree.ElementTree as ET
+import zipfile
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -253,6 +254,7 @@ def _build_xlsx_preview(
             sheet_records: list[dict[str, Any]] = []
         else:
             preview_bytes, sheet_records = _render_workbook_sheets_with_libreoffice(
+                original_bytes=original_bytes,
                 workbook=workbook,
                 filename=filename,
                 visible_sheets=visible_sheets,
@@ -289,7 +291,7 @@ def _load_preview_workbook(original_bytes: bytes) -> Any:
         return load_workbook(
             io.BytesIO(original_bytes),
             data_only=False,
-            read_only=False,
+            read_only=True,
         )
 
 
@@ -314,6 +316,7 @@ def _visible_workbook_sheets(workbook: Any) -> list[_WorkbookSheet]:
 
 def _render_workbook_sheets_with_libreoffice(
     *,
+    original_bytes: bytes,
     workbook: Any,
     filename: str,
     visible_sheets: list[_WorkbookSheet],
@@ -331,7 +334,11 @@ def _render_workbook_sheets_with_libreoffice(
 
         for sheet in visible_sheets:
             workbook_path = temp_dir / f"sheet_{sheet.sheet_number:03d}{suffix}"
-            _save_single_visible_sheet_workbook(workbook, sheet, workbook_path)
+            _write_single_visible_sheet_workbook(
+                original_bytes,
+                target_sheet=sheet,
+                output_path=workbook_path,
+            )
             pdf_path = _convert_xlsx_file_to_pdf(
                 soffice=soffice,
                 input_path=workbook_path,
@@ -343,25 +350,61 @@ def _render_workbook_sheets_with_libreoffice(
         return _merge_sheet_pdfs(pdf_parts)
 
 
-def _save_single_visible_sheet_workbook(
-    workbook: Any,
+def _write_single_visible_sheet_workbook(
+    original_bytes: bytes,
+    *,
     target_sheet: _WorkbookSheet,
     output_path: Path,
 ) -> None:
-    """Save a temporary workbook with exactly one visible sheet."""
-    for sheet_name in workbook.sheetnames:
-        sheet = workbook[sheet_name]
-        sheet.sheet_state = "visible" if sheet_name == target_sheet.name else "hidden"
-    _set_active_sheet(workbook, target_sheet.name)
-    workbook.save(output_path)
+    """Write an XLSX copy with only the target sheet visible.
+
+    This avoids saving through openpyxl, which can fail on workbooks with
+    embedded drawing/image streams loaded from a closed XLSX archive.
+    """
+    workbook_xml_path = "xl/workbook.xml"
+    with zipfile.ZipFile(io.BytesIO(original_bytes), "r") as source_zip:
+        workbook_xml = source_zip.read(workbook_xml_path)
+        patched_workbook_xml = _single_visible_sheet_workbook_xml(
+            workbook_xml,
+            target_sheet_number=target_sheet.sheet_number,
+        )
+        with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as out:
+            for info in source_zip.infolist():
+                if info.filename == workbook_xml_path:
+                    out.writestr(info, patched_workbook_xml)
+                    continue
+                out.writestr(info, source_zip.read(info.filename))
 
 
-def _set_active_sheet(workbook: Any, sheet_name: str) -> None:
-    """Best-effort active sheet selection for LibreOffice exports."""
-    try:
-        workbook.active = workbook.sheetnames.index(sheet_name)
-    except Exception:
-        return
+def _single_visible_sheet_workbook_xml(
+    workbook_xml: bytes,
+    *,
+    target_sheet_number: int,
+) -> bytes:
+    """Return workbook.xml with exactly one visible sheet."""
+    root = ET.fromstring(workbook_xml)
+    sheets = [element for element in root.iter() if _local_name(element.tag) == "sheet"]
+    if target_sheet_number < 1 or target_sheet_number > len(sheets):
+        raise ValueError(
+            f"Sheet number {target_sheet_number} is outside workbook sheet range."
+        )
+    for sheet_number, sheet_element in enumerate(sheets, start=1):
+        if sheet_number == target_sheet_number:
+            sheet_element.attrib.pop("state", None)
+        else:
+            sheet_element.set("state", "hidden")
+    for workbook_view in root.iter():
+        if _local_name(workbook_view.tag) != "workbookView":
+            continue
+        active_tab = str(target_sheet_number - 1)
+        workbook_view.set("activeTab", active_tab)
+        workbook_view.set("firstSheet", active_tab)
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _local_name(tag: str) -> str:
+    """Return XML local-name from an optional namespaced tag."""
+    return tag.rsplit("}", 1)[-1]
 
 
 def _convert_xlsx_file_to_pdf(
