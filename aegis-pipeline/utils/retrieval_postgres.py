@@ -14,9 +14,15 @@ from typing import Any
 
 from psycopg2 import Binary, sql
 from psycopg2.extensions import connection as PsycopgConnection
+from psycopg2.extras import Json
 
 from connections.postgres_connector import connection_scope
 from utils.config_setup import get_input_source_config
+from utils.source_document_previews import (
+    build_source_document_preview,
+    is_preview_current,
+    preview_error_metadata,
+)
 from utils.source_context import get_source_context
 
 PUBLIC_SCHEMA = "public"
@@ -51,6 +57,17 @@ class PostgresSyncResult:
     def master_embedding_row_count(self) -> int:
         """Return total embedding rows currently present for the manifest files."""
         return sum(self.embedding_row_counts.values())
+
+
+@dataclass(frozen=True)
+class SourceDocumentState:
+    """Stored source-document state needed to decide whether to resync bytes."""
+
+    file_hash: str
+    preview_mime_type: str | None
+    has_preview_bytes: bool
+    preview_metadata: Mapping[str, Any] | None
+    preview_error: str | None
 
 
 def sync_retrieval_source(
@@ -193,12 +210,20 @@ def _sync_source_documents(
 
     input_base_path = Path(input_config.base_path).expanduser().resolve()
     current_file_ids = [str(record.file_id) for record in records]
-    existing_hashes = _existing_document_hashes(conn, source_type)
+    existing_states = _existing_document_states(conn, source_type)
     deleted_rows = _delete_stale_source_documents(conn, source_type, current_file_ids)
     upserted_rows = 0
 
     for record in records:
-        if existing_hashes.get(str(record.file_id)) == str(record.file_hash):
+        state = existing_states.get(str(record.file_id))
+        if state is not None and is_preview_current(
+            stored_file_hash=state.file_hash,
+            expected_file_hash=str(record.file_hash),
+            preview_mime_type=state.preview_mime_type,
+            has_preview_bytes=state.has_preview_bytes,
+            preview_metadata=state.preview_metadata,
+            preview_error=state.preview_error,
+        ):
             continue
         absolute_path = _resolve_document_path(input_base_path, str(record.file_path))
         upserted_rows += _upsert_source_document(conn, record, absolute_path)
@@ -229,19 +254,38 @@ def _delete_stale_source_documents(
         return int(cur.rowcount)
 
 
-def _existing_document_hashes(
+def _existing_document_states(
     conn: PsycopgConnection,
     source_type: str,
-) -> dict[str, str]:
-    """Return stored document hashes for one logical source."""
+) -> dict[str, SourceDocumentState]:
+    """Return stored source document state for one logical source."""
     with conn.cursor() as cur:
         cur.execute(
-            sql.SQL("SELECT file_id, file_hash FROM {} WHERE source_type = %s").format(
-                _table_ref(SOURCE_DOCUMENTS_TABLE),
-            ),
+            sql.SQL(
+                """
+                SELECT
+                    file_id,
+                    file_hash,
+                    preview_mime_type,
+                    preview_bytes IS NOT NULL AS has_preview_bytes,
+                    preview_metadata,
+                    preview_error
+                FROM {}
+                WHERE source_type = %s
+                """
+            ).format(_table_ref(SOURCE_DOCUMENTS_TABLE)),
             (source_type,),
         )
-        return {str(file_id): str(file_hash) for file_id, file_hash in cur.fetchall()}
+        return {
+            str(row[0]): SourceDocumentState(
+                file_hash=str(row[1]),
+                preview_mime_type=str(row[2]) if row[2] else None,
+                has_preview_bytes=bool(row[3]),
+                preview_metadata=_metadata_mapping(row[4]),
+                preview_error=str(row[5]) if row[5] else None,
+            )
+            for row in cur.fetchall()
+        }
 
 
 def _upsert_source_document(
@@ -265,6 +309,33 @@ def _upsert_source_document(
             f"expected {record.file_hash}, got {actual_hash} at {absolute_path}"
         )
 
+    mime_type = _mime_type(str(record.file_name), str(record.file_type))
+    try:
+        preview = build_source_document_preview(
+            original_bytes=original_bytes,
+            filename=str(record.file_name),
+            file_type=str(record.file_type),
+            mime_type=mime_type,
+            source_type=str(record.data_source),
+            file_hash=str(record.file_hash),
+        )
+        preview_mime_type = preview.preview_mime_type
+        preview_bytes = preview.preview_bytes
+        preview_metadata = preview.preview_metadata
+        preview_error = None
+    except Exception as exc:
+        preview_mime_type = None
+        preview_bytes = None
+        preview_metadata = preview_error_metadata(
+            filename=str(record.file_name),
+            file_type=str(record.file_type),
+            mime_type=mime_type,
+            source_type=str(record.data_source),
+            file_hash=str(record.file_hash),
+            error=exc,
+        )
+        preview_error = _preview_error_text(exc)
+
     with conn.cursor() as cur:
         cur.execute(
             sql.SQL(
@@ -282,9 +353,17 @@ def _upsert_source_document(
                     file_hash,
                     file_size,
                     date_last_modified,
-                    original_bytes
+                    original_bytes,
+                    preview_mime_type,
+                    preview_bytes,
+                    preview_metadata,
+                    preview_generated_at,
+                    preview_error
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, now(), %s
+                )
                 ON CONFLICT (source_type, file_id) DO UPDATE SET
                     fiscal_year = EXCLUDED.fiscal_year,
                     quarter = EXCLUDED.quarter,
@@ -297,6 +376,11 @@ def _upsert_source_document(
                     file_size = EXCLUDED.file_size,
                     date_last_modified = EXCLUDED.date_last_modified,
                     original_bytes = EXCLUDED.original_bytes,
+                    preview_mime_type = EXCLUDED.preview_mime_type,
+                    preview_bytes = EXCLUDED.preview_bytes,
+                    preview_metadata = EXCLUDED.preview_metadata,
+                    preview_generated_at = EXCLUDED.preview_generated_at,
+                    preview_error = EXCLUDED.preview_error,
                     updated_at = now()
                 WHERE target.file_hash IS DISTINCT FROM EXCLUDED.file_hash
                    OR target.file_size IS DISTINCT FROM EXCLUDED.file_size
@@ -304,6 +388,10 @@ def _upsert_source_document(
                    OR target.file_path IS DISTINCT FROM EXCLUDED.file_path
                    OR target.mime_type IS DISTINCT FROM EXCLUDED.mime_type
                    OR target.date_last_modified IS DISTINCT FROM EXCLUDED.date_last_modified
+                   OR target.preview_mime_type IS DISTINCT FROM EXCLUDED.preview_mime_type
+                   OR target.preview_bytes IS DISTINCT FROM EXCLUDED.preview_bytes
+                   OR target.preview_metadata IS DISTINCT FROM EXCLUDED.preview_metadata
+                   OR target.preview_error IS DISTINCT FROM EXCLUDED.preview_error
                 """
             ).format(_table_ref(SOURCE_DOCUMENTS_TABLE)),
             (
@@ -315,11 +403,15 @@ def _upsert_source_document(
                 str(record.file_name),
                 str(record.file_type),
                 str(record.file_path),
-                _mime_type(str(record.file_name), str(record.file_type)),
+                mime_type,
                 str(record.file_hash),
                 expected_size,
                 str(record.date_last_modified),
                 Binary(original_bytes),
+                preview_mime_type,
+                Binary(preview_bytes) if preview_bytes is not None else None,
+                Json(preview_metadata),
+                preview_error,
             ),
         )
         return int(cur.rowcount)
@@ -366,6 +458,24 @@ def _mime_type(filename: str, file_type: str) -> str:
         return MIME_TYPES_BY_EXTENSION[extension]
     guessed, _ = mimetypes.guess_type(filename)
     return guessed or "application/octet-stream"
+
+
+def _metadata_mapping(value: Any) -> Mapping[str, Any] | None:
+    """Return JSONB metadata as a mapping when possible."""
+    if isinstance(value, Mapping):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, Mapping) else None
+    return None
+
+
+def _preview_error_text(error: BaseException) -> str:
+    """Return a compact error string suitable for preview_error."""
+    return f"{type(error).__name__}: {error}"[:4000]
 
 
 def _rows_to_csv_text(

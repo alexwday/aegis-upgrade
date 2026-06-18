@@ -159,17 +159,24 @@ After syncing source tables, refresh the agent availability preflight table:
 .venv/bin/python scripts/db_setup.py --refresh-availability
 ```
 
+## Backfill Source Document Previews
+
+Existing databases need one preview migration/backfill before preview links can
+open XLSX sheet PDFs and XML transcript PDFs from Postgres:
+
+```bash
+.venv/bin/python scripts/backfill_source_document_previews.py --all --apply
+```
+
 ## Test Source Document Preview Links
 
 Open a local UI that samples one random chunk-backed source document link per
-source, then streams the selected document bytes from Postgres when clicked:
+source. Reference links stream pre-generated `preview_bytes`; the original
+download button streams exact `original_bytes`:
 
 ```bash
 .venv/bin/python scripts/test_source_document_preview.py --env-file .env
 ```
-
-PDFs stream directly. XLSX and DOCX previews are converted to temporary PDFs
-with LibreOffice, so `soffice` must be installed or available on `PATH`.
 
 ## Run The Agent
 

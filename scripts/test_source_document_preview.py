@@ -2,18 +2,16 @@
 """Open a local UI for testing source-document preview links from Postgres.
 
 The UI samples one source document per retrieval source, chooses a random chunk
-from that source's chunk table, and builds a reference link that loads the
-document bytes from ``public.aegis_source_documents``.
+from that source's chunk table, and builds a reference link that loads
+pre-generated preview bytes from ``public.aegis_source_documents``.
 """
 
 from __future__ import annotations
 
 import argparse
 import html
-import shutil
-import subprocess
+import json
 import sys
-import tempfile
 import webbrowser
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -34,16 +32,10 @@ DOCUMENTS_TABLE = "aegis_source_documents"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8766
 PDF_MIME_TYPE = "application/pdf"
-CONVERTIBLE_PREVIEW_TYPES = {
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
-CONVERTIBLE_EXTENSIONS = {"docx", "xlsx"}
-SOFFICE_CANDIDATES = (
-    "soffice",
-    "libreoffice",
-    "/Applications/LibreOffice.app/Contents/MacOS/soffice",
-)
+
+
+class PreviewUnavailableError(RuntimeError):
+    """Raised when a document has not been pre-rendered for browser preview."""
 
 
 @dataclass(frozen=True)
@@ -76,6 +68,7 @@ class Reference:
     chunk_name: str
     summary: str
     chunk_preview: str
+    preview_metadata: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -212,8 +205,13 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 return
 
             requested_page = parse_page_number(first_query_value(query, "page"))
-            page_number = requested_page or reference.page_number
-            self.send_html(render_preview(reference, page_number))
+            requested_sheet = first_query_value(query, "sheet")
+            page_number = resolve_reference_page(
+                reference,
+                requested_page=requested_page,
+                requested_sheet=requested_sheet,
+            )
+            self.send_html(render_preview(reference, page_number, requested_sheet))
 
         def handle_preview_document(self, path: str) -> None:
             try:
@@ -229,6 +227,9 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
             except LookupError as exc:
                 self.send_error(HTTPStatus.NOT_FOUND, str(exc))
                 return
+            except PreviewUnavailableError as exc:
+                self.send_error(HTTPStatus.CONFLICT, str(exc))
+                return
             except RuntimeError as exc:
                 self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
                 return
@@ -237,6 +238,7 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 content=preview_payload["content"],
                 content_type=preview_payload["mime_type"],
                 filename=preview_payload["filename"],
+                disposition="inline",
             )
 
         def handle_document(self, path: str) -> None:
@@ -256,6 +258,7 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
                 content=content,
                 content_type=payload["mime_type"],
                 filename=filename,
+                disposition="attachment",
             )
 
         def send_html(self, body: str, status: HTTPStatus = HTTPStatus.OK) -> None:
@@ -282,11 +285,15 @@ def make_handler(state: AppState) -> type[BaseHTTPRequestHandler]:
             content: bytes,
             content_type: str,
             filename: str,
+            disposition: str,
         ) -> None:
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(content)))
-            self.send_header("Content-Disposition", f'inline; filename="{filename}"')
+            self.send_header(
+                "Content-Disposition",
+                f'{disposition}; filename="{filename}"',
+            )
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(content)
@@ -354,7 +361,8 @@ def load_random_reference(
                 d.file_size,
                 d.fiscal_year,
                 d.quarter,
-                d.bank
+                d.bank,
+                d.preview_metadata
             FROM {documents} AS d
             WHERE EXISTS (
                 SELECT 1
@@ -379,7 +387,8 @@ def load_random_reference(
             c.page_number,
             c.name,
             c.summary,
-            left(coalesce(c.chunk_content, ''), 1200) AS chunk_preview
+            left(coalesce(c.chunk_content, ''), 1200) AS chunk_preview,
+            d.preview_metadata
         FROM random_doc AS d
         JOIN {data_table} AS c
           ON c.source_type = d.source_type
@@ -420,7 +429,8 @@ def load_reference(
             c.page_number,
             c.name,
             c.summary,
-            left(coalesce(c.chunk_content, ''), 1200) AS chunk_preview
+            left(coalesce(c.chunk_content, ''), 1200) AS chunk_preview,
+            d.preview_metadata
         FROM {documents} AS d
         JOIN {data_table} AS c
           ON c.source_type = d.source_type
@@ -459,7 +469,9 @@ def load_document_bytes(
             d.file_type,
             d.preview_mime_type,
             d.preview_bytes,
-            d.original_bytes
+            d.original_bytes,
+            d.preview_metadata,
+            d.preview_error
         FROM {documents} AS d
         WHERE d.file_id = %s
           AND EXISTS (
@@ -490,98 +502,33 @@ def load_document_bytes(
         "preview_mime_type": str(row[3]) if row[3] else "",
         "preview_bytes": row[4],
         "original_bytes": row[5],
+        "preview_metadata": metadata_from_db(row[6]),
+        "preview_error": str(row[7]) if row[7] else "",
     }
 
 
 def build_preview_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Return bytes suitable for browser preview, converting Office files to PDF."""
+    """Return pre-generated preview bytes suitable for browser preview."""
     filename = str(payload["filename"])
-    mime_type = str(payload["mime_type"])
-    file_type = str(payload["file_type"]).lower()
-    original_bytes = bytes(payload["original_bytes"])
     preview_mime_type = str(payload.get("preview_mime_type") or "")
     preview_bytes = payload.get("preview_bytes")
-
-    if preview_mime_type == PDF_MIME_TYPE and preview_bytes:
-        return {
-            "filename": pdf_filename(filename),
-            "mime_type": PDF_MIME_TYPE,
-            "content": bytes(preview_bytes),
-        }
-    if mime_type == PDF_MIME_TYPE:
-        return {
-            "filename": safe_header_filename(filename),
-            "mime_type": PDF_MIME_TYPE,
-            "content": original_bytes,
-        }
-    if mime_type in CONVERTIBLE_PREVIEW_TYPES or file_type in CONVERTIBLE_EXTENSIONS:
-        return {
-            "filename": pdf_filename(filename),
-            "mime_type": PDF_MIME_TYPE,
-            "content": convert_office_bytes_to_pdf(
-                original_bytes,
-                filename=filename,
-                file_type=file_type,
-            ),
-        }
+    preview_content = bytes(preview_bytes) if preview_bytes is not None else b""
+    preview_error = str(payload.get("preview_error") or "")
+    if preview_error:
+        raise PreviewUnavailableError(
+            "Preview generation previously failed for this document: "
+            f"{preview_error}"
+        )
+    if preview_mime_type != PDF_MIME_TYPE or not preview_content:
+        raise PreviewUnavailableError(
+            "Preview bytes are missing. Run "
+            "scripts/backfill_source_document_previews.py --all --apply."
+        )
     return {
-        "filename": safe_header_filename(filename),
-        "mime_type": mime_type,
-        "content": original_bytes,
+        "filename": pdf_filename(filename),
+        "mime_type": PDF_MIME_TYPE,
+        "content": preview_content,
     }
-
-
-def convert_office_bytes_to_pdf(
-    content: bytes,
-    *,
-    filename: str,
-    file_type: str,
-) -> bytes:
-    """Convert Office bytes to PDF with LibreOffice for browser preview."""
-    soffice = resolve_soffice()
-    suffix = Path(filename).suffix or f".{file_type}"
-    with tempfile.TemporaryDirectory(prefix="aegis-preview-") as temp_dir_name:
-        temp_dir = Path(temp_dir_name)
-        input_path = temp_dir / f"source{suffix}"
-        input_path.write_bytes(content)
-        try:
-            result = subprocess.run(
-                [
-                    soffice,
-                    "--headless",
-                    "--convert-to",
-                    "pdf",
-                    "--outdir",
-                    str(temp_dir),
-                    str(input_path),
-                ],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=90,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("LibreOffice PDF conversion timed out.") from exc
-        output_path = input_path.with_suffix(".pdf")
-        if result.returncode != 0 or not output_path.is_file():
-            raise RuntimeError(
-                "LibreOffice failed to convert source document to PDF: "
-                f"{result.stderr.strip() or result.stdout.strip()}"
-            )
-        return output_path.read_bytes()
-
-
-def resolve_soffice() -> str:
-    """Return a LibreOffice executable path."""
-    for candidate in SOFFICE_CANDIDATES:
-        resolved = shutil.which(candidate) if "/" not in candidate else candidate
-        if resolved and Path(resolved).is_file():
-            return resolved
-    raise RuntimeError(
-        "LibreOffice/soffice was not found. Install LibreOffice or add soffice "
-        "to PATH to preview xlsx/docx documents as PDFs."
-    )
 
 
 def reference_from_row(row: tuple[Any, ...], source: RetrievalSource) -> Reference:
@@ -604,6 +551,7 @@ def reference_from_row(row: tuple[Any, ...], source: RetrievalSource) -> Referen
         chunk_name=str(row[11] or ""),
         summary=str(row[12] or ""),
         chunk_preview=str(row[13] or ""),
+        preview_metadata=metadata_from_db(row[14]),
     )
 
 
@@ -656,7 +604,7 @@ def render_source_card(status: SourceStatus) -> str:
     ref = status.reference
     preview_url = reference_url(ref)
     direct_url = document_url(ref)
-    page_label = str(ref.page_number) if ref.page_number is not None else "none"
+    locator_label, locator_value = reference_locator(ref)
     return f"""<article class="card">
   <div class="card-head">
     <div>
@@ -672,7 +620,7 @@ def render_source_card(status: SourceStatus) -> str:
       <dd>{escape(ref.bank)} &middot; {escape(ref.fiscal_year)} {escape(ref.quarter)}</dd>
     </div>
     <div><dt>Chunk</dt><dd>{escape(ref.chunk_id)}</dd></div>
-    <div><dt>Page</dt><dd>{escape(page_label)}</dd></div>
+    <div><dt>{escape(locator_label)}</dt><dd>{escape(locator_value)}</dd></div>
     <div><dt>Bytes</dt><dd>{ref.file_size:,}</dd></div>
   </dl>
   <div class="actions">
@@ -680,7 +628,7 @@ def render_source_card(status: SourceStatus) -> str:
       Open reference
     </a>
     <a class="button secondary" href="{escape(direct_url, quote=True)}" target="_blank">
-      Open bytes
+      Download original
     </a>
   </div>
   <label>Reference link</label>
@@ -690,11 +638,19 @@ def render_source_card(status: SourceStatus) -> str:
 </article>"""
 
 
-def render_preview(reference: Reference, page_number: int | None) -> str:
+def render_preview(
+    reference: Reference,
+    page_number: int | None,
+    sheet_name: str = "",
+) -> str:
     """Render the clicked reference preview page."""
     doc_src = preview_document_url(reference, page_number=page_number)
     original_src = document_url(reference)
     page_text = str(page_number) if page_number is not None else "none"
+    if sheet_name:
+        locator_text = f"sheet {sheet_name} -> preview page {page_text}"
+    else:
+        locator_text = f"preview page {page_text}"
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -707,13 +663,13 @@ def render_preview(reference: Reference, page_number: int | None) -> str:
   <div class="preview-toolbar">
     <div>
       <strong>{escape(reference.filename)}</strong>
-      <span>{escape(reference.source_label)} &middot; page {escape(page_text)}</span>
+      <span>{escape(reference.source_label)} &middot; {escape(locator_text)}</span>
     </div>
     <a class="button secondary" href="{escape(doc_src, quote=True)}" target="_blank">
       Open PDF preview
     </a>
     <a class="button secondary" href="{escape(original_src, quote=True)}" target="_blank">
-      Open original bytes
+      Download original
     </a>
   </div>
   <iframe class="document-frame" src="{escape(doc_src, quote=True)}"></iframe>
@@ -949,21 +905,19 @@ def reference_url(ref: Reference) -> str:
         f"/preview/{quote(ref.source_key, safe='')}/{quote(ref.file_id, safe='')}"
         f"?chunk_id={quote(ref.chunk_id, safe='')}"
     )
-    if ref.page_number is not None:
+    if ref.file_type.lower() == "xlsx" and ref.chunk_name:
+        url += f"&sheet={quote(ref.chunk_name, safe='')}"
+    elif ref.page_number is not None:
         url += f"&page={ref.page_number}"
     return url
 
 
-def document_url(ref: Reference, page_number: int | None = None) -> str:
+def document_url(ref: Reference) -> str:
     """Return the byte-streaming URL for one source document."""
-    url = (
+    return (
         f"/document/{quote(ref.source_key, safe='')}/{quote(ref.file_id, safe='')}"
         f"?chunk_id={quote(ref.chunk_id, safe='')}"
     )
-    resolved_page = page_number if page_number is not None else ref.page_number
-    if resolved_page is not None and ref.mime_type == "application/pdf":
-        url += f"#page={resolved_page}"
-    return url
 
 
 def preview_document_url(ref: Reference, page_number: int | None = None) -> str:
@@ -977,6 +931,59 @@ def preview_document_url(ref: Reference, page_number: int | None = None) -> str:
     if resolved_page is not None:
         url += f"#page={resolved_page}"
     return url
+
+
+def resolve_reference_page(
+    ref: Reference,
+    *,
+    requested_page: int | None,
+    requested_sheet: str,
+) -> int | None:
+    """Resolve the preview PDF page for page- or sheet-based references."""
+    sheet_name = requested_sheet or (
+        ref.chunk_name if ref.file_type.lower() == "xlsx" else ""
+    )
+    if sheet_name:
+        sheet_page = preview_page_for_sheet(ref.preview_metadata, sheet_name)
+        if sheet_page is not None:
+            return sheet_page
+    return requested_page or ref.page_number
+
+
+def preview_page_for_sheet(
+    preview_metadata: Mapping[str, Any],
+    sheet_name: str,
+) -> int | None:
+    """Return the generated preview page for an XLSX sheet name."""
+    requested = sheet_name.casefold()
+    for sheet in preview_metadata.get("sheets", []):
+        if not isinstance(sheet, Mapping):
+            continue
+        if str(sheet.get("name", "")).casefold() != requested:
+            continue
+        return parse_page_number(sheet.get("preview_page"))
+    return None
+
+
+def reference_locator(ref: Reference) -> tuple[str, str]:
+    """Return a compact label/value for the sampled reference target."""
+    if ref.file_type.lower() == "xlsx":
+        return "Sheet", ref.chunk_name or "none"
+    page_label = str(ref.page_number) if ref.page_number is not None else "none"
+    return "Page", page_label
+
+
+def metadata_from_db(value: Any) -> dict[str, Any]:
+    """Return JSONB metadata as a dict."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def first_query_value(query: Mapping[str, list[str]], key: str) -> str:
