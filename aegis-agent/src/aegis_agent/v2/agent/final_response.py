@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any, AsyncIterator
 
 from ...connections.llm_connector import stream
+from .llm_context import build_llm_context
 from .models import (
     EvidenceChunk,
     FinalResponseShell,
     FinalResponseSummary,
     FinalResponseTile,
     NormalizedTurn,
+    evidence_id_for_chunk,
 )
 
 
@@ -215,7 +216,7 @@ def _quick_metric_tiles(
                 label=label,
                 value=value,
                 context=context,
-                evidence_ids=[f"{chunk.source_name}:{chunk.chunk_id}"],
+                evidence_ids=[evidence_id_for_chunk(chunk)],
             )
         )
         if len(tiles) >= 4:
@@ -289,20 +290,6 @@ def _clean_tile_text(value: Any, limit: int) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
-def _llm_context(turn: NormalizedTurn) -> dict[str, Any]:
-    """Build the minimal connector context for local API-key auth."""
-    token = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or ""
-    return {
-        "execution_id": turn.run_uuid or "v2-agent",
-        "auth_config": {
-            "success": bool(token),
-            "method": "api_key",
-            "token": token,
-        },
-        "ssl_config": {"verify": False},
-    }
-
-
 def _chunk_prompt(chunks: list[EvidenceChunk], limit: int = 24) -> str:
     """Return compact evidence text for synthesis prompts."""
     lines: list[str] = []
@@ -320,7 +307,10 @@ def _chunk_prompt(chunks: list[EvidenceChunk], limit: int = 24) -> str:
             if part
         )
         text = chunk.chunk_content.replace("\x00", " ")[:1200]
-        lines.append(f"[E{index}] {chunk.source_display_name} | {location}\n{text}")
+        evidence_id = evidence_id_for_chunk(chunk)
+        lines.append(
+            f"[[{evidence_id}]] {chunk.source_display_name} | {location}\n{text}"
+        )
     return "\n\n".join(lines)
 
 
@@ -331,15 +321,15 @@ async def stream_synthesis(
     chunks: list[EvidenceChunk] | None = None,
     research_result: dict[str, Any] | None = None,
     conversation_context: Any | None = None,
+    llm_context: dict[str, Any] | None = None,
 ) -> AsyncIterator[str]:
     """Stream a final answer body."""
     chunks = chunks or []
     research_result = research_result or {}
     prior_context = _conversation_context_prompt(conversation_context)
-    if not os.getenv("API_KEY") and not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError(
-            "Aegis response synthesis requires API_KEY or OPENAI_API_KEY."
-        )
+    llm_context = llm_context or await build_llm_context(
+        turn.run_uuid or "v2-agent", "response synthesis"
+    )
 
     if mode == "general":
         user_content = _with_prior_context(
@@ -374,7 +364,8 @@ async def stream_synthesis(
         )
         evidence_text = (
             "Use only the supplied evidence chunks for source-backed claims. "
-            "Cite compactly with evidence ids like [E1] where helpful. "
+            "Cite source-backed claims with the exact double-bracket evidence ids "
+            "shown before each chunk, for example [[rts:chunk-1]]. "
             "Prior context is for continuity only; do not use it as source evidence for new claims."
         )
 
@@ -392,7 +383,7 @@ async def stream_synthesis(
     try:
         async for chunk in stream(
             messages,
-            _llm_context(turn),
+            llm_context,
             {"model": turn.model_plan.orchestrator_model if turn.model_plan else None},
         ):
             for choice in chunk.get("choices", []):

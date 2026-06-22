@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from aegis_agent.v2.agent.final_response import build_final_shell
+import pytest
+
+from aegis_agent.v2.agent.final_response import build_final_shell, stream_synthesis
 from aegis_agent.v2.agent.models import EvidenceChunk, normalize_turn
 
 
@@ -77,3 +79,44 @@ def test_quick_final_shell_extracts_metric_tiles_from_evidence_chunks() -> None:
     assert shell.tiles[0].value == "13.2%"
     assert shell.tiles[0].evidence_ids == ["rts:chunk-1"]
     assert "RY" in str(shell.tiles[0].context)
+
+
+@pytest.mark.asyncio
+async def test_quick_synthesis_prompt_uses_stable_chunk_evidence_ids(monkeypatch) -> None:
+    """Quick answer prompts should cite the same ids used by artifacts and tiles."""
+    captured: dict[str, str] = {}
+
+    async def fake_stream(messages, _context, _overrides):
+        captured["system"] = messages[0]["content"]
+        captured["user"] = messages[1]["content"]
+        yield {"choices": [{"delta": {"content": "done"}}]}
+
+    monkeypatch.setattr("aegis_agent.v2.agent.final_response.stream", fake_stream)
+    turn = normalize_turn({"content": "What changed in capital?"})
+    chunks = [
+        EvidenceChunk(
+            source_name="rts",
+            source_display_name="Reports to Shareholders",
+            chunk_id="chunk-1",
+            chunk_content="The bank reported that CET1 ratio was 13.2%.",
+        )
+    ]
+
+    output = [
+        item
+        async for item in stream_synthesis(
+            turn,
+            mode="quick",
+            chunks=chunks,
+            llm_context={
+                "execution_id": "test-run",
+                "auth_config": {"success": True, "method": "api_key", "token": "test"},
+                "ssl_config": {"success": True, "verify": False},
+            },
+        )
+    ]
+
+    assert output == ["done"]
+    assert "[[rts:chunk-1]]" in captured["user"]
+    assert "[E1]" not in captured["user"]
+    assert "[[rts:chunk-1]]" in captured["system"]

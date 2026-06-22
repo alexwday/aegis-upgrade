@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 from ..sources import SOURCE_TABLES, source_label
+from .llm_context import build_llm_context
 from .models import EvidenceChunk, NormalizedTurn
 
 
@@ -147,18 +147,12 @@ def _chunk_from_standard_record(
     )
 
 
-def _research_context(turn: NormalizedTurn) -> dict[str, Any]:
+async def _research_context(turn: NormalizedTurn) -> dict[str, Any]:
     """Build strict LLM context for quick retrieval."""
-    token = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not token:
-        raise RuntimeError("Quick search requires API_KEY or OPENAI_API_KEY.")
-    return {
-        "execution_id": turn.run_uuid or "v2-quick-research",
-        "source_filter": turn.source_ids,
-        "v2_model_plan": turn.model_plan,
-        "auth_config": {"token": token, "method": "api_key", "success": True},
-        "ssl_config": {"verify": False},
-    }
+    context = await build_llm_context(turn.run_uuid or "v2-quick-research", "quick search")
+    context["source_filter"] = turn.source_ids
+    context["v2_model_plan"] = turn.model_plan
+    return context
 
 
 def _bank_period_combinations(turn: NormalizedTurn) -> list[dict[str, Any]]:
@@ -329,14 +323,18 @@ async def _retrieve_mature_source(
 
 
 async def retrieve_quick_evidence(
-    turn: NormalizedTurn, limit: int = QUICK_SEARCH_CHUNK_LIMIT
+    turn: NormalizedTurn,
+    limit: int = QUICK_SEARCH_CHUNK_LIMIT,
+    llm_context: dict[str, Any] | None = None,
 ) -> RetrievalResult:
     """Retrieve and rank quick-search chunks using mature V1 retrieval primitives."""
     selected_sources = turn.source_ids
     if not selected_sources:
         raise RuntimeError("Quick search requires at least one selected data source.")
     combinations = _bank_period_combinations(turn)
-    context = _research_context(turn)
+    context = llm_context or await _research_context(turn)
+    context.setdefault("source_filter", turn.source_ids)
+    context.setdefault("v2_model_plan", turn.model_plan)
     per_source_limit = max(
         8, min(limit, (limit // max(len(selected_sources) * len(combinations), 1)) + 8)
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from aegis_agent.v2.agent.deep import has_deep_scope, research_arguments
+import aegis_agent.v2.agent.deep as deep
 from aegis_agent.v2.agent.models import (
     EvidenceChunk,
     normalize_search_mode,
@@ -60,6 +61,29 @@ def test_normalize_turn_prefers_v2_contract_fields() -> None:
     assert turn.model_plan.orchestrator_tier == "large"
 
 
+def test_normalize_turn_infers_explicit_text_scope_when_filters_are_missing() -> None:
+    """Explicit bank, fiscal year, and quarter text should populate research scope."""
+    turn = normalize_turn(
+        {
+            "content": "Compare RBC Q1 2026 CET1 trends across all sources",
+            "search_selection": "quick",
+        }
+    )
+
+    assert turn.bank_symbols == ["RY-CA"]
+    assert turn.fiscal_years == [2026]
+    assert turn.quarters == ["Q1"]
+
+
+def test_normalize_turn_keeps_relative_periods_unresolved() -> None:
+    """Relative periods should still require clarification."""
+    turn = normalize_turn({"content": "Compare RBC last quarter capital trends"})
+
+    assert turn.bank_symbols == ["RY-CA"]
+    assert turn.fiscal_years == []
+    assert turn.quarters == []
+
+
 @pytest.mark.asyncio
 async def test_quick_retrieval_caps_chunks_across_sources(monkeypatch) -> None:
     """Quick search should enforce the total evidence budget after all source retrievals."""
@@ -70,7 +94,9 @@ async def test_quick_retrieval_caps_chunks_across_sources(monkeypatch) -> None:
         assert combinations == [
             {"bank_symbol": "RY", "fiscal_year": 2026, "quarter": "Q1"}
         ]
-        assert context == {"execution_id": "test"}
+        assert context["execution_id"] == "test"
+        assert context["source_filter"] == ["transcripts", "rts", "pillar3"]
+        assert context["v2_model_plan"].research_tier == "small"
         assert search_top_k >= 8
         return [
             EvidenceChunk(
@@ -83,9 +109,6 @@ async def test_quick_retrieval_caps_chunks_across_sources(monkeypatch) -> None:
             for index in range(60)
         ]
 
-    monkeypatch.setattr(
-        retrieval, "_research_context", lambda _turn: {"execution_id": "test"}
-    )
     monkeypatch.setattr(
         retrieval, "_retrieve_mature_source", fake_retrieve_mature_source
     )
@@ -101,7 +124,7 @@ async def test_quick_retrieval_caps_chunks_across_sources(monkeypatch) -> None:
         }
     )
 
-    result = await retrieve_quick_evidence(turn)
+    result = await retrieve_quick_evidence(turn, llm_context={"execution_id": "test"})
 
     assert len(result.chunks) == 80
     assert result.chunks[0].score == 59
@@ -146,3 +169,39 @@ def test_deep_research_scope_and_arguments() -> None:
     assert research_arguments(scoped)["combinations"] == [
         {"bank_symbol": "RY", "fiscal_year": 2026, "quarter": "Q1"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_deep_research_uses_supplied_llm_context(monkeypatch) -> None:
+    """Deep research should pass an authenticated V2 context into the V1 tool."""
+    captured: dict[str, object] = {}
+
+    async def fake_run_research_tool(arguments, context):
+        captured["arguments"] = arguments
+        captured["context"] = context
+        return {"status": "success", "findings": []}
+
+    monkeypatch.setattr(deep, "run_research_tool", fake_run_research_tool)
+    turn = normalize_turn(
+        {
+            "content": "Analyze provisions",
+            "filters": {"source_ids": ["rts"]},
+            "optional_context": {
+                "bank_tickers": ["RY"],
+                "fiscal_years": [2026],
+                "quarters": ["Q1"],
+            },
+        }
+    )
+    llm_context = {
+        "execution_id": "test-run",
+        "auth_config": {"success": True, "method": "api_key", "token": "test-token"},
+        "ssl_config": {"success": True, "verify": False},
+    }
+
+    result = await deep.run_deep_research(turn, llm_context=llm_context)
+
+    assert result["status"] == "success"
+    assert captured["context"] is llm_context
+    assert llm_context["source_filter"] == ["rts"]
+    assert llm_context["auth_config"]["token"] == "test-token"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -64,6 +65,11 @@ class EvidenceChunk(BaseModel):
     reference_payload: dict[str, Any] = Field(default_factory=dict)
 
 
+def evidence_id_for_chunk(chunk: EvidenceChunk) -> str:
+    """Return the stable evidence id for a quick-search chunk."""
+    return f"{chunk.source_name}:{chunk.chunk_id}"
+
+
 class FinalResponseSummary(BaseModel):
     """Final response summary shell reused from the V1 response pattern."""
 
@@ -88,6 +94,18 @@ class FinalResponseShell(BaseModel):
     summary: FinalResponseSummary | None = None
     tiles: list[FinalResponseTile] = Field(default_factory=list, max_length=4)
     body_style: str = "user_requested_format"
+
+
+BANK_ALIAS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("RY-CA", re.compile(r"\b(?:rbc|ry(?:-ca)?|royal bank(?: of canada)?)\b", re.I)),
+    ("TD-CA", re.compile(r"\b(?:td(?:-ca)?|td bank|toronto[- ]dominion)\b", re.I)),
+    ("BMO-CA", re.compile(r"\b(?:bmo(?:-ca)?|bank of montreal)\b", re.I)),
+    ("BNS-CA", re.compile(r"\b(?:bns(?:-ca)?|scotia(?:bank)?|bank of nova scotia)\b", re.I)),
+    ("CM-CA", re.compile(r"\b(?:cibc|cm-ca|canadian imperial)\b", re.I)),
+    ("NA-CA", re.compile(r"\b(?:national bank(?: of canada)?|nbc|na-ca)\b", re.I)),
+)
+QUARTER_RE = re.compile(r"\bQ([1-4])\b", re.I)
+FISCAL_YEAR_RE = re.compile(r"\b(?:FY|fiscal\s+year\s+|fiscal\s+)?(20\d{2})\b", re.I)
 
 
 def resolve_model_plan(model_selection: str | None) -> ModelPlan:
@@ -158,8 +176,40 @@ def _first_dict(*values: Any) -> dict[str, Any]:
     return {}
 
 
+def _append_unique(values: list[Any], item: Any) -> None:
+    """Append an item while preserving the original order."""
+    if item not in values:
+        values.append(item)
+
+
+def _infer_bank_symbols(content: str) -> list[str]:
+    """Infer canonical bank tickers from explicit text aliases."""
+    symbols: list[str] = []
+    for symbol, pattern in BANK_ALIAS_PATTERNS:
+        if pattern.search(content):
+            _append_unique(symbols, symbol)
+    return symbols
+
+
+def _infer_fiscal_years(content: str) -> list[int]:
+    """Infer explicit fiscal years from text."""
+    years: list[int] = []
+    for match in FISCAL_YEAR_RE.finditer(content):
+        _append_unique(years, int(match.group(1)))
+    return years
+
+
+def _infer_quarters(content: str) -> list[str]:
+    """Infer explicit fiscal quarters from text."""
+    quarters: list[str] = []
+    for match in QUARTER_RE.finditer(content):
+        _append_unique(quarters, f"Q{match.group(1)}")
+    return quarters
+
+
 def normalize_turn(payload: dict[str, Any]) -> NormalizedTurn:
     """Normalize the websocket payload while accepting the transition contract."""
+    content = str(payload.get("query") or payload.get("content") or "").strip()
     filters = _first_dict(payload.get("filters"))
     optional_context = _first_dict(
         payload.get("optional_context"), payload.get("context")
@@ -178,18 +228,24 @@ def normalize_turn(payload: dict[str, Any]) -> NormalizedTurn:
         or filters.get("bank_tickers")
         or filters.get("bank_symbols")
     )
+    if not bank_symbols:
+        bank_symbols = _infer_bank_symbols(content)
     bank_categories = _string_list(
         optional_context.get("bank_categories") or filters.get("bank_categories")
     )
     fiscal_years = _int_list(
         optional_context.get("fiscal_years") or filters.get("fiscal_years")
     )
+    if not fiscal_years:
+        fiscal_years = _infer_fiscal_years(content)
     quarters = [
         quarter.upper()
         for quarter in _string_list(
             optional_context.get("quarters") or filters.get("quarters")
         )
     ]
+    if not quarters:
+        quarters = _infer_quarters(content)
     search_mode = normalize_search_mode(
         payload.get("search_selection")
         or payload.get("search_mode")
@@ -204,7 +260,7 @@ def normalize_turn(payload: dict[str, Any]) -> NormalizedTurn:
     )
     model_plan = resolve_model_plan(str(model_selection or "small"))
     return NormalizedTurn(
-        content=str(payload.get("query") or payload.get("content") or "").strip(),
+        content=content,
         user_id=str(payload.get("user_id")) if payload.get("user_id") else None,
         conversation_id=(
             str(payload.get("conversation_id"))

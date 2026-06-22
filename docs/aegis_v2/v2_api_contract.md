@@ -119,13 +119,21 @@ and process monitor rows.
 
 ## Route Behavior
 
+The backend runs one user turn through a bounded V2 agent step loop. Each step
+plans the next action, applies deterministic guardrails, and executes one action
+until it completes, asks the user for clarification, or reaches the loop limit.
+The UI-facing event sequences below remain the stable contract.
+
 General conversation:
 
 1. `tool.completed` with `name = classify_turn` and
    `decision = general_conversation`.
-2. `final_response.started`.
-3. Zero or more `chat.delta`.
-4. Final `chat.message` with `final = true`.
+2. Zero or more `chat.delta`.
+3. Final `chat.message` with `final = true`.
+
+General conversation is a plain chat response and does not emit
+`final_response.started`; final shells are reserved for source-backed quick/deep
+research responses.
 
 Availability:
 

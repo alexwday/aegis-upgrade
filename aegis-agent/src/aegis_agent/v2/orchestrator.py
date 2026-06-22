@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html import escape
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
 
 from .agent.artifacts import deep_research_html, evidence_ids, quick_research_html
@@ -16,8 +16,9 @@ from .agent.final_response import (
     final_shell_marker,
     stream_synthesis,
 )
+from .agent.llm_context import build_llm_context
 from .agent.models import EvidenceChunk, NormalizedTurn, normalize_turn
-from .agent.planner import ClarificationOption, plan_turn
+from .agent.planner import ClarificationOption, TurnPlan, plan_turn
 from .agent.retrieval import QUICK_SEARCH_CHUNK_LIMIT, retrieve_quick_evidence
 from .schemas import (
     Artifact,
@@ -33,6 +34,10 @@ from .tools.catalog import optional_context
 from .tools.runtime import load_conversation_context
 
 
+MAX_AGENT_STEPS = 3
+AgentStepStatus = Literal["continue", "complete", "awaiting_user", "error"]
+
+
 @dataclass
 class V2SessionState:
     """State scoped to one V2 websocket connection."""
@@ -46,8 +51,17 @@ class V2SessionState:
     conversation_context: ConversationContext = field(
         default_factory=ConversationContext
     )
+    llm_context: dict[str, Any] | None = None
     latest_availability: DataAvailabilityResponse | None = None
     latest_availability_widget_id: str | None = None
+
+
+@dataclass
+class AgentStepOutcome:
+    """Mutable outcome for one bounded V2 agent step."""
+
+    status: AgentStepStatus = "continue"
+    reason: str = ""
 
 
 def event(
@@ -75,6 +89,23 @@ def _missing_research_scope(turn: NormalizedTurn) -> list[str]:
     if not turn.quarters:
         missing.append("quarter")
     return missing
+
+
+def _effective_plan(plan: TurnPlan, turn: NormalizedTurn) -> TurnPlan:
+    """Apply deterministic guardrails around the model-selected next action."""
+    missing = _missing_research_scope(turn)
+    period_scope = {"bank", "fiscal_year", "quarter"}
+    planner_missing = set(plan.missing_scope)
+    only_period_scope_missing = bool(planner_missing) and planner_missing <= period_scope
+    if plan.action == "clarify" and not missing and only_period_scope_missing:
+        return TurnPlan(
+            action="research",
+            rationale=(
+                "Planner requested clarification, but explicit bank, fiscal year, "
+                "and quarter are already available."
+            ),
+        )
+    return plan
 
 
 def _availability_filters_from_turn(turn: NormalizedTurn) -> AvailabilityFilters:
@@ -241,6 +272,7 @@ async def _stream_final_response(
         chunks=chunks,
         research_result=research_result,
         conversation_context=state.conversation_context,
+        llm_context=state.llm_context,
     ):
         if not delta:
             continue
@@ -273,6 +305,7 @@ async def _stream_plain_response(
         turn,
         mode="general",
         conversation_context=state.conversation_context,
+        llm_context=state.llm_context,
     ):
         if not delta:
             continue
@@ -475,7 +508,9 @@ async def _run_quick_research_turn(
         },
     )
     try:
-        result = await retrieve_quick_evidence(turn, limit=QUICK_SEARCH_CHUNK_LIMIT)
+        result = await retrieve_quick_evidence(
+            turn, limit=QUICK_SEARCH_CHUNK_LIMIT, llm_context=state.llm_context
+        )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         yield event(
             state.session_id,
@@ -573,7 +608,7 @@ async def _run_deep_research_turn(
         },
     )
     try:
-        research_result = await run_deep_research(turn)
+        research_result = await run_deep_research(turn, llm_context=state.llm_context)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         yield event(
             state.session_id,
@@ -667,28 +702,108 @@ async def run_turn(
         return
 
     try:
-        plan = await plan_turn(turn, state.conversation_context)
+        state.llm_context = await build_llm_context(
+            turn.run_uuid or "v2-agent", "turn execution"
+        )
     except Exception as exc:  # pylint: disable=broad-exception-caught
         yield event(
             state.session_id,
             "tool.failed",
-            {"tool_id": f"tool_{uuid4().hex}", "name": "plan_turn", "error": str(exc)},
+            {
+                "tool_id": f"tool_{uuid4().hex}",
+                "name": "setup_llm_context",
+                "error": str(exc),
+            },
         )
         yield event(
             state.session_id,
             "chat.message",
-            _message_payload("assistant", f"Aegis could not plan the next step: {exc}"),
+            _message_payload("assistant", f"Aegis could not set up LLM access: {exc}"),
         )
         return
 
+    async for item in _run_agent_loop(state, turn):
+        yield item
+
+
+async def _run_agent_loop(
+    state: V2SessionState, turn: NormalizedTurn
+) -> AsyncIterator[dict[str, Any]]:
+    """Run bounded V2 planning and action steps for one user turn."""
+    for step_index in range(MAX_AGENT_STEPS):
+        try:
+            plan = await plan_turn(turn, state.conversation_context, state.llm_context)
+            plan = _effective_plan(plan, turn)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            yield event(
+                state.session_id,
+                "tool.failed",
+                {
+                    "tool_id": f"tool_{uuid4().hex}",
+                    "name": "plan_turn",
+                    "error": str(exc),
+                    "agent_step": step_index,
+                },
+            )
+            yield event(
+                state.session_id,
+                "chat.message",
+                _message_payload(
+                    "assistant", f"Aegis could not plan the next step: {exc}"
+                ),
+            )
+            return
+
+        outcome = AgentStepOutcome()
+        async for item in _run_planned_action(
+            state, turn, plan, outcome=outcome, step_index=step_index
+        ):
+            yield item
+
+        if outcome.status in {"complete", "awaiting_user", "error"}:
+            return
+
+    yield event(
+        state.session_id,
+        "tool.failed",
+        {
+            "tool_id": f"tool_{uuid4().hex}",
+            "name": "agent_loop",
+            "error": "Aegis reached its V2 planning loop limit before completing the turn.",
+            "max_steps": MAX_AGENT_STEPS,
+        },
+    )
+    yield event(
+        state.session_id,
+        "chat.message",
+        _message_payload(
+            "assistant",
+            "Aegis reached its planning loop limit before completing the turn.",
+        ),
+    )
+
+
+async def _run_planned_action(
+    state: V2SessionState,
+    turn: NormalizedTurn,
+    plan: TurnPlan,
+    *,
+    outcome: AgentStepOutcome,
+    step_index: int,
+) -> AsyncIterator[dict[str, Any]]:
+    """Execute one model-selected action and set the step outcome."""
     if plan.action == "availability":
         async for item in _run_availability_turn(state, turn):
             yield item
+        outcome.status = "complete"
+        outcome.reason = "availability_completed"
         return
 
     if plan.action == "conversation":
         async for item in _run_general_turn(state, turn):
             yield item
+        outcome.status = "complete"
+        outcome.reason = "conversation_completed"
         return
 
     if plan.action == "clarify":
@@ -703,6 +818,8 @@ async def run_turn(
             options=plan.clarification_options,
         ):
             yield item
+        outcome.status = "awaiting_user"
+        outcome.reason = "clarification_requested"
         return
 
     missing = _missing_research_scope(turn)
@@ -715,12 +832,15 @@ async def run_turn(
             options=plan.clarification_options,
         ):
             yield item
+        outcome.status = "awaiting_user"
+        outcome.reason = "research_scope_missing"
         return
 
     if turn.search_mode == "deep":
         async for item in _run_deep_research_turn(state, turn):
             yield item
-        return
-
-    async for item in _run_quick_research_turn(state, turn):
-        yield item
+    else:
+        async for item in _run_quick_research_turn(state, turn):
+            yield item
+    outcome.status = "complete"
+    outcome.reason = "research_completed"

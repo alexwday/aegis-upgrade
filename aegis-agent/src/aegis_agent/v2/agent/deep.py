@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...model.agents.research import run_research_tool
+from .llm_context import build_llm_context
 from .models import NormalizedTurn
 
 
@@ -32,13 +33,13 @@ def research_arguments(turn: NormalizedTurn) -> dict[str, Any]:
     }
 
 
-async def run_deep_research(turn: NormalizedTurn) -> dict[str, Any]:
+async def run_deep_research(
+    turn: NormalizedTurn, llm_context: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """Run the configured deep research path."""
-    context = {
-        "execution_id": turn.run_uuid or "v2-deep-research",
-        "source_filter": turn.source_ids,
-        "v2_model_plan": turn.model_plan,
-        "auth_config": {"token": "", "method": "api_key", "success": False},
-        "ssl_config": {"verify": False},
-    }
+    context = llm_context or await build_llm_context(
+        turn.run_uuid or "v2-deep-research", "deep research"
+    )
+    context.setdefault("source_filter", turn.source_ids)
+    context.setdefault("v2_model_plan", turn.model_plan)
     return await run_research_tool(research_arguments(turn), context)

@@ -7,7 +7,7 @@ from html import escape
 from typing import Any
 from urllib.parse import quote
 
-from .models import EvidenceChunk, NormalizedTurn
+from .models import EvidenceChunk, NormalizedTurn, evidence_id_for_chunk
 
 
 def _scope_label(turn: NormalizedTurn) -> str:
@@ -31,7 +31,7 @@ def _scope_label(turn: NormalizedTurn) -> str:
 
 def evidence_ids(chunks: list[EvidenceChunk]) -> list[str]:
     """Return stable evidence ids for artifact references."""
-    return [f"{chunk.source_name}:{chunk.chunk_id}" for chunk in chunks]
+    return [evidence_id_for_chunk(chunk) for chunk in chunks]
 
 
 def _chunk_location(chunk: EvidenceChunk) -> str:
@@ -293,7 +293,7 @@ def quick_research_html(
             cards = []
             for chunk in file_chunks:
                 source_index += 1
-                evidence_id = f"{chunk.source_name}:{chunk.chunk_id}"
+                evidence_id = evidence_id_for_chunk(chunk)
                 cards.append(
                     "<article class='chunk'>"
                     f"<div class='evidence'>{escape(_evidence_label(source_index))} | {escape(evidence_id)}</div>"

@@ -45,6 +45,7 @@ async def test_plan_turn_requires_llm_credentials(monkeypatch) -> None:
     """The planner should fail explicitly instead of using keyword fallbacks."""
     monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("AUTH_METHOD", "api_key")
     turn = normalize_turn({"content": "hi"})
 
     with pytest.raises(RuntimeError, match="planning requires API_KEY"):

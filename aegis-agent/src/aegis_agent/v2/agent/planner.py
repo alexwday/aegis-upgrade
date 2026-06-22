@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from ...connections.llm_connector import complete_with_tools
 from .conversation import ConversationContext
+from .llm_context import build_llm_context
 from .models import NormalizedTurn
 
 
@@ -92,20 +92,6 @@ PLANNER_TOOL: dict[str, Any] = {
         },
     },
 }
-
-
-def _llm_context(turn: NormalizedTurn) -> dict[str, Any]:
-    """Build connector context for the planner call."""
-    token = os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or ""
-    return {
-        "execution_id": turn.run_uuid or "v2-agent-planner",
-        "auth_config": {
-            "success": bool(token),
-            "method": "api_key",
-            "token": token,
-        },
-        "ssl_config": {"verify": False},
-    }
 
 
 def _turn_payload(turn: NormalizedTurn) -> dict[str, Any]:
@@ -216,14 +202,16 @@ def _normalize_plan(arguments: dict[str, Any]) -> TurnPlan:
 async def plan_turn(
     turn: NormalizedTurn,
     conversation_context: ConversationContext,
+    llm_context: dict[str, Any] | None = None,
 ) -> TurnPlan:
     """Use the orchestrator model to select the next agent action."""
-    if not os.getenv("API_KEY") and not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("Aegis planning requires API_KEY or OPENAI_API_KEY.")
+    llm_context = llm_context or await build_llm_context(
+        turn.run_uuid or "v2-agent-planner", "planning"
+    )
     response = await complete_with_tools(
         _planner_messages(turn, conversation_context),
         [PLANNER_TOOL],
-        _llm_context(turn),
+        llm_context,
         {
             "model": turn.model_plan.orchestrator_model if turn.model_plan else None,
             "temperature": 0,
