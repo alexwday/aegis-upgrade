@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -322,7 +323,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--install-frontend-deps",
         action="store_true",
-        help="Run npm install before building the V2 frontend.",
+        help="Force npm dependency install before building the V2 frontend.",
+    )
+    parser.add_argument(
+        "--skip-frontend-deps",
+        action="store_true",
+        help="Do not auto-install missing frontend dependencies before build.",
     )
     parser.add_argument("--skip-server", action="store_true")
     parser.add_argument("--skip-open", action="store_true")
@@ -848,16 +854,42 @@ def sync_prompts(prompts_dir: Path, args: argparse.Namespace, env_file: Path) ->
 def build_frontend(args: argparse.Namespace) -> None:
     """Build the V2 frontend bundle."""
     frontend_root = AGENT_ROOT / "frontend"
-    if args.install_frontend_deps:
+    npm_command = shutil.which("npm")
+    if not npm_command:
+        raise RuntimeError(
+            "npm was not found on PATH. Install Node.js/npm on this workstation, "
+            "or rerun without --build-frontend to use the committed frontend bundle."
+        )
+
+    package_lock = frontend_root / "package-lock.json"
+    install_command = (
+        [npm_command, "ci"] if package_lock.exists() else [npm_command, "install"]
+    )
+    vite_bin = frontend_root / "node_modules" / ".bin" / "vite"
+    tsc_bin = frontend_root / "node_modules" / ".bin" / "tsc"
+    missing_deps = not vite_bin.exists() or not tsc_bin.exists()
+
+    if args.install_frontend_deps or (missing_deps and not args.skip_frontend_deps):
+        reason = (
+            "forced"
+            if args.install_frontend_deps
+            else "missing node_modules/.bin build tools"
+        )
+        print(f"frontend dependencies: installing ({reason})")
         run_step(
-            "frontend npm install",
-            ["npm", "install"],
+            "frontend dependencies",
+            install_command,
             dry_run=args.dry_run,
             cwd=frontend_root,
         )
+    elif missing_deps:
+        print(
+            "warn: frontend dependencies appear to be missing, but --skip-frontend-deps was passed; "
+            "npm run build may fail with exit status 127."
+        )
     run_step(
         "frontend build",
-        ["npm", "run", "build"],
+        [npm_command, "run", "build"],
         dry_run=args.dry_run,
         cwd=frontend_root,
     )

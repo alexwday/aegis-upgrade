@@ -52,6 +52,12 @@ Run the strict install/update:
 ./.venv/bin/python scripts/update_v2_workstation.py --build-frontend
 ```
 
+When `--build-frontend` is used, the updater checks for local frontend build
+tools under `aegis-agent/frontend/node_modules/.bin`. If `tsc` or `vite` is
+missing, it runs `npm ci` automatically before `npm run build`. If `npm` itself
+is not installed, install Node.js/npm on the workstation or omit
+`--build-frontend` to use the committed frontend bundle.
+
 If the monitored institutions YAML is not in a default location:
 
 ```bash
