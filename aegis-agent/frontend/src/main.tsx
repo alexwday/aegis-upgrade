@@ -504,6 +504,7 @@ function App() {
   const socketRef = React.useRef<WebSocket | null>(null);
   const inputRef = React.useRef<HTMLTextAreaElement | null>(null);
   const messageStreamRef = React.useRef<HTMLDivElement | null>(null);
+  const ignoredConversationIdsRef = React.useRef<Set<string>>(new Set());
 
   const catalogRows = availabilityCatalog?.rows ?? availability?.rows ?? [];
   const categoryOptions = uniqueSorted(catalogRows.map((row) => row.bank_category));
@@ -647,6 +648,9 @@ function App() {
     const eventConversationId = typeof event.payload.conversation_id === "string"
       ? event.payload.conversation_id
       : "";
+    if (eventConversationId && ignoredConversationIdsRef.current.has(eventConversationId)) {
+      return;
+    }
     if (eventConversationId) setActiveConversationId(eventConversationId);
 
     if (event.type === "session.ready") {
@@ -809,6 +813,20 @@ function App() {
 
   function resetFileExplorer() {
     setOpenTreeKeys(new Set());
+  }
+
+  // TEMP_CHAT_RESET_BUTTON: local-only reset until permanent conversation controls exist.
+  function resetChatSession() {
+    setActiveConversationId((current) => {
+      if (current) ignoredConversationIdsRef.current.add(current);
+      return null;
+    });
+    setChatItems([]);
+    setArtifacts([]);
+    setPreview({ kind: "empty", title: "Preview" });
+    setInput("");
+    setQueryFiltersOpen(false);
+    setStatus("Ready");
   }
 
   function openDocumentsFromRow(row: DataAvailabilityRow) {
@@ -1064,6 +1082,19 @@ function App() {
       data-right-drawer={rightDrawerOpen ? "open" : "closed"}
     >
       <section className="chat-panel">
+        {/* TEMP_CHAT_RESET_BUTTON: remove this toolbar when durable conversation controls ship. */}
+        <div className="temp-chat-toolbar">
+          <button
+            type="button"
+            className="icon-command temp-chat-reset-button"
+            title="Start a new temporary chat"
+            aria-label="Start a new temporary chat"
+            onClick={resetChatSession}
+          >
+            <RefreshCw size={15} />
+            <span>New chat</span>
+          </button>
+        </div>
         <div className="message-stream" ref={messageStreamRef}>
           {chatItems.map((item) => {
             if (item.type === "widget") {
