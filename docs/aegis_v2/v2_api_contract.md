@@ -119,15 +119,17 @@ and process monitor rows.
 
 ## Route Behavior
 
-The backend runs one user turn through a bounded V2 agent step loop. Each step
-plans the next action, applies deterministic guardrails, and executes one action
-until it completes, asks the user for clarification, or reaches the loop limit.
+The backend runs one user turn through a bounded V2 single-agent step loop. Each
+step lets the Aegis tool-calling agent choose one action: direct answer, plain
+clarification, clarification widget, availability check, or scoped research. The
+loop stops when that action completes, asks the user for clarification, errors,
+or reaches the loop limit.
 The UI-facing event sequences below remain the stable contract.
 
 General conversation:
 
-1. `tool.completed` with `name = classify_turn` and
-   `decision = general_conversation`.
+1. `tool.completed` with `name = agent_decision` and
+   `decision = direct_response`.
 2. Zero or more `chat.delta`.
 3. Final `chat.message` with `final = true`.
 
@@ -153,10 +155,17 @@ Quick research:
 6. Zero or more `chat.delta`.
 7. Final `chat.message` with `final = true`.
 
+Clarification:
+
+1. Plain clarification emits `tool.completed` with `name = ask_clarification`
+   and an assistant `chat.message`.
+2. Widget clarification emits `tool.completed` with `name = ask_clarification`,
+   then `widget.completed` with the trusted clarification HTML and actions.
+
 Deep research:
 
-1. If bank, fiscal year, or quarter scope is missing, Aegis sends a clarifying
-   `chat.message` and does not run broad research.
+1. If bank, fiscal year, quarter, or the research question is missing, Aegis
+   asks for clarification and does not run broad research.
 2. Otherwise the stream mirrors quick research with `name = deep_research` and
    `kind = deep_search`.
 

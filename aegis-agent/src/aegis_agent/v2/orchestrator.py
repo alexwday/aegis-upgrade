@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from html import escape
 from typing import Any, AsyncIterator, Literal
@@ -19,8 +18,13 @@ from .agent.final_response import (
 )
 from .agent.llm_context import build_llm_context
 from .agent.models import EvidenceChunk, NormalizedTurn, normalize_turn
-from .agent.planner import ClarificationOption, TurnPlan, plan_turn
 from .agent.retrieval import QUICK_SEARCH_CHUNK_LIMIT, retrieve_quick_evidence
+from .agent.tool_agent import (
+    AgentDecision,
+    AgentToolCall,
+    ClarificationOption,
+    run_agent_step,
+)
 from .schemas import (
     Artifact,
     AvailabilityFilters,
@@ -30,6 +34,7 @@ from .schemas import (
     V2Event,
     WidgetAction,
 )
+from .sources import normalize_source_ids
 from .tools.availability import availability_widget_html
 from .tools.catalog import optional_context
 from .tools.runtime import load_conversation_context
@@ -37,17 +42,6 @@ from .tools.runtime import load_conversation_context
 
 MAX_AGENT_STEPS = 3
 AgentStepStatus = Literal["continue", "complete", "awaiting_user", "error"]
-GREETING_RESPONSE = (
-    "Hi. I can check data availability, find source documents, and run quick "
-    "or deep source-backed research across Canadian bank disclosures."
-)
-CAPABILITIES_RESPONSE = (
-    "I can check which sources are available by bank and period, open document "
-    "previews, run quick evidence search, run deeper source-backed research, "
-    "and summarize results with citations. For research, give me a bank, fiscal "
-    "year, quarter, source set, and question. For coverage, ask something like "
-    "'what data do you have for RBC?'"
-)
 
 
 @dataclass
@@ -103,104 +97,6 @@ def _missing_research_scope(turn: NormalizedTurn) -> list[str]:
     return missing
 
 
-def _effective_plan(plan: TurnPlan, turn: NormalizedTurn) -> TurnPlan:
-    """Apply deterministic guardrails around the model-selected next action."""
-    missing = _missing_research_scope(turn)
-    period_scope = {"bank", "fiscal_year", "quarter"}
-    planner_missing = set(plan.missing_scope)
-    only_period_scope_missing = bool(planner_missing) and planner_missing <= period_scope
-    if plan.action == "clarify" and not missing and only_period_scope_missing:
-        return TurnPlan(
-            action="research",
-            rationale=(
-                "Planner requested clarification, but explicit bank, fiscal year, "
-                "and quarter are already available."
-            ),
-        )
-    return plan
-
-
-def _simple_turn_text(turn: NormalizedTurn) -> str:
-    """Return normalized turn text for deterministic routing."""
-    return " ".join(turn.content.lower().split())
-
-
-def _is_greeting(turn: NormalizedTurn) -> bool:
-    """Return whether a turn is only a lightweight greeting."""
-    text = re.sub(r"[^a-z\s]", "", _simple_turn_text(turn)).strip()
-    return text in {
-        "hi",
-        "hello",
-        "hey",
-        "good morning",
-        "good afternoon",
-        "good evening",
-    }
-
-
-def _is_capabilities_request(turn: NormalizedTurn) -> bool:
-    """Return whether the user is asking what Aegis can do."""
-    text = _simple_turn_text(turn).strip("?.! ")
-    return text in {
-        "help",
-        "what can you do",
-        "what can you help with",
-        "what do you do",
-        "how can you help",
-        "what are you able to do",
-        "what can aegis do",
-    }
-
-
-def _is_availability_request(turn: NormalizedTurn) -> bool:
-    """Return whether the user is asking for source/data coverage, not research."""
-    text = _simple_turn_text(turn)
-    source_terms = (
-        "data",
-        "source",
-        "sources",
-        "document",
-        "documents",
-        "docs",
-        "filings",
-    )
-    if "availability" in text or "source coverage" in text or "data coverage" in text:
-        return True
-    if "what sources" in text or "which sources" in text:
-        return True
-    if "what documents" in text or "which documents" in text or "what filings" in text:
-        return True
-    if "what data" in text and (
-        "have" in text or "available" in text or "coverage" in text
-    ):
-        return True
-    if "do you have" in text and any(term in text for term in source_terms):
-        return True
-    if "available" in text and any(term in text for term in source_terms):
-        return True
-    return False
-
-
-def _deterministic_plan(turn: NormalizedTurn) -> TurnPlan | None:
-    """Route obvious UI/coverage/chat turns before asking the LLM planner."""
-    if _is_greeting(turn):
-        return TurnPlan(action="conversation", rationale="deterministic_greeting")
-    if _is_capabilities_request(turn):
-        return TurnPlan(action="conversation", rationale="deterministic_capabilities")
-    if _is_availability_request(turn):
-        return TurnPlan(action="availability", rationale="deterministic_availability")
-    return None
-
-
-def _deterministic_general_response(turn: NormalizedTurn) -> str | None:
-    """Return local responses for simple general turns that should not hit the LLM."""
-    if _is_greeting(turn):
-        return GREETING_RESPONSE
-    if _is_capabilities_request(turn):
-        return CAPABILITIES_RESPONSE
-    return None
-
-
 def _availability_filters_from_turn(turn: NormalizedTurn) -> AvailabilityFilters:
     """Build availability filters from a normalized turn."""
     return AvailabilityFilters(
@@ -212,6 +108,127 @@ def _availability_filters_from_turn(turn: NormalizedTurn) -> AvailabilityFilters
         keyword=turn.keyword,
         limit=500,
     )
+
+
+def _string_list(value: Any) -> list[str]:
+    """Return a deduplicated list of non-empty strings."""
+    if value is None:
+        return []
+    values = value if isinstance(value, list) else [value]
+    result: list[str] = []
+    for item in values:
+        text = str(item).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _int_list(value: Any) -> list[int]:
+    """Return a deduplicated list of integer values."""
+    result: list[int] = []
+    for item in _string_list(value):
+        try:
+            parsed = int(item)
+        except ValueError:
+            continue
+        if parsed not in result:
+            result.append(parsed)
+    return result
+
+
+def _quarter_list(value: Any) -> list[str]:
+    """Return normalized fiscal quarter labels."""
+    quarters: list[str] = []
+    for item in _string_list(value):
+        quarter = item.upper()
+        if quarter in {"1", "2", "3", "4"}:
+            quarter = f"Q{quarter}"
+        if quarter in {"Q1", "Q2", "Q3", "Q4"} and quarter not in quarters:
+            quarters.append(quarter)
+    return quarters
+
+
+def _bank_symbols(value: Any) -> list[str]:
+    """Return canonical-ish bank symbols, using the turn normalizer for aliases."""
+    symbols: list[str] = []
+    for item in _string_list(value):
+        inferred = normalize_turn({"content": item}).bank_symbols
+        candidates = inferred or [item.upper()]
+        for candidate in candidates:
+            if candidate not in symbols:
+                symbols.append(candidate)
+    return symbols
+
+
+def _availability_turn_from_arguments(
+    turn: NormalizedTurn, arguments: dict[str, Any]
+) -> NormalizedTurn:
+    """Apply agent-selected availability filters to the current turn."""
+    return replace(
+        turn,
+        source_ids=normalize_source_ids(arguments.get("source_ids") or turn.source_ids),
+        bank_symbols=_bank_symbols(arguments.get("bank_symbols")) or turn.bank_symbols,
+        bank_categories=(
+            _string_list(arguments.get("bank_categories")) or turn.bank_categories
+        ),
+        fiscal_years=_int_list(arguments.get("fiscal_years")) or turn.fiscal_years,
+        quarters=_quarter_list(arguments.get("quarters")) or turn.quarters,
+        keyword=str(arguments.get("keyword") or turn.keyword or "").strip() or None,
+    )
+
+
+def _research_turn_from_arguments(
+    turn: NormalizedTurn, arguments: dict[str, Any]
+) -> NormalizedTurn:
+    """Apply agent-selected research scope to the current turn."""
+    combinations = arguments.get("combinations")
+    combos = combinations if isinstance(combinations, list) else []
+    bank_values: list[Any] = []
+    fiscal_year_values: list[Any] = []
+    quarter_values: list[Any] = []
+    for combo in combos:
+        if not isinstance(combo, dict):
+            continue
+        bank_values.append(combo.get("bank_symbol"))
+        fiscal_year_values.append(combo.get("fiscal_year"))
+        quarter_values.append(combo.get("quarter"))
+    source_ids = normalize_source_ids(arguments.get("source_ids") or turn.source_ids)
+    search_mode = str(arguments.get("search_mode") or turn.search_mode).lower()
+    return replace(
+        turn,
+        content=str(arguments.get("question") or turn.content).strip(),
+        source_ids=source_ids,
+        bank_symbols=_bank_symbols(bank_values) or turn.bank_symbols,
+        fiscal_years=_int_list(fiscal_year_values) or turn.fiscal_years,
+        quarters=_quarter_list(quarter_values) or turn.quarters,
+        search_mode="deep" if search_mode == "deep" else "quick",
+    )
+
+
+def _clarification_options(arguments: dict[str, Any]) -> list[ClarificationOption]:
+    """Return normalized agent-supplied clarification options."""
+    options: list[ClarificationOption] = []
+    raw_options = arguments.get("options") if isinstance(arguments, dict) else []
+    if not isinstance(raw_options, list):
+        return options
+    for index, item in enumerate(raw_options, start=1):
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        if not label:
+            continue
+        option_id = str(item.get("id") or f"option_{index}").strip()
+        description = str(item.get("description") or "").strip() or None
+        payload = item.get("payload")
+        options.append(
+            ClarificationOption(
+                id=option_id or f"option_{index}",
+                label=label,
+                description=description,
+                payload=payload if isinstance(payload, dict) else {},
+            )
+        )
+    return options
 
 
 def _availability_actions(response: DataAvailabilityResponse) -> list[WidgetAction]:
@@ -387,94 +404,31 @@ async def _stream_final_response(
     )
 
 
-async def _stream_plain_response(
-    state: V2SessionState,
-    turn: NormalizedTurn,
+async def _run_direct_response(
+    state: V2SessionState, turn: NormalizedTurn, content: str
 ) -> AsyncIterator[dict[str, Any]]:
-    """Stream one normal assistant message without a research response shell."""
+    """Emit a direct answer from the single agent."""
     stream_id = turn.run_uuid or f"stream_{uuid4().hex}"
-    body_parts: list[str] = []
-    async for delta in stream_synthesis(
-        turn,
-        mode="general",
-        conversation_context=state.conversation_context,
-        llm_context=state.llm_context,
-    ):
-        if not delta:
-            continue
-        body_parts.append(delta)
-        yield event(
-            state.session_id,
-            "chat.delta",
-            {"stream_id": stream_id, "role": "assistant", "content": delta},
-        )
-    yield event(
-        state.session_id,
-        "chat.message",
-        _message_payload(
-            "assistant", "".join(body_parts).strip(), stream_id=stream_id, final=True
-        ),
-    )
-
-
-async def _run_general_turn(
-    state: V2SessionState, turn: NormalizedTurn
-) -> AsyncIterator[dict[str, Any]]:
-    """Answer a non-research user turn."""
     yield event(
         state.session_id,
         "tool.completed",
         {
             "tool_id": f"tool_{uuid4().hex}",
-            "name": "classify_turn",
-            "decision": "general_conversation",
+            "name": "agent_decision",
+            "decision": "direct_response",
             "model_plan": turn.model_plan.__dict__ if turn.model_plan else {},
         },
     )
-    deterministic_response = _deterministic_general_response(turn)
-    if deterministic_response is not None:
-        stream_id = turn.run_uuid or f"stream_{uuid4().hex}"
-        yield event(
-            state.session_id,
-            "chat.delta",
-            {
-                "stream_id": stream_id,
-                "role": "assistant",
-                "content": deterministic_response,
-            },
-        )
-        yield event(
-            state.session_id,
-            "chat.message",
-            _message_payload(
-                "assistant",
-                deterministic_response,
-                stream_id=stream_id,
-                final=True,
-            ),
-        )
-        return
-
-    try:
-        async for item in _stream_plain_response(state, turn):
-            yield item
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        yield event(
-            state.session_id,
-            "tool.failed",
-            {
-                "tool_id": f"tool_{uuid4().hex}",
-                "name": "conversation",
-                "error": str(exc),
-            },
-        )
-        yield event(
-            state.session_id,
-            "chat.message",
-            _message_payload(
-                "assistant", f"Aegis could not generate a response: {exc}"
-            ),
-        )
+    yield event(
+        state.session_id,
+        "chat.delta",
+        {"stream_id": stream_id, "role": "assistant", "content": content},
+    )
+    yield event(
+        state.session_id,
+        "chat.message",
+        _message_payload("assistant", content, stream_id=stream_id, final=True),
+    )
 
 
 def _clarification_question(missing: list[str]) -> str:
@@ -541,10 +495,10 @@ def _clarification_actions(
     return actions
 
 
-def _planner_clarification_actions(
+def _agent_clarification_actions(
     turn: NormalizedTurn, options: list[ClarificationOption]
 ) -> list[WidgetAction]:
-    """Convert model-suggested choices into clarification widget actions."""
+    """Convert agent-suggested choices into clarification widget actions."""
     actions: list[WidgetAction] = []
     for option in options:
         payload = dict(option.payload)
@@ -559,6 +513,33 @@ def _planner_clarification_actions(
             )
         )
     return actions
+
+
+async def _run_plain_clarification_turn(
+    state: V2SessionState,
+    turn: NormalizedTurn,
+    missing: list[str],
+    question: str,
+) -> AsyncIterator[dict[str, Any]]:
+    """Ask a plain text clarification question without a widget."""
+    yield event(
+        state.session_id,
+        "tool.completed",
+        {
+            "tool_id": f"tool_{uuid4().hex}",
+            "name": "ask_clarification",
+            "decision": "needs_clarification",
+            "presentation": "message",
+            "missing_scope": missing,
+            "message": question,
+            "model_plan": turn.model_plan.__dict__ if turn.model_plan else {},
+        },
+    )
+    yield event(
+        state.session_id,
+        "chat.message",
+        _message_payload("assistant", question),
+    )
 
 
 async def _run_clarification_turn(
@@ -577,7 +558,7 @@ async def _run_clarification_turn(
         response = await optional_context(_availability_filters_from_turn(turn))
     except Exception:
         response = None
-    actions = _planner_clarification_actions(turn, options or [])
+    actions = _agent_clarification_actions(turn, options or [])
     if not actions:
         actions = _clarification_actions(turn, response)
     widget = HtmlWidget(
@@ -594,8 +575,9 @@ async def _run_clarification_turn(
         "tool.completed",
         {
             "tool_id": tool_id,
-            "name": "classify_turn",
+            "name": "ask_clarification",
             "decision": "needs_clarification",
+            "presentation": "widget",
             "missing_scope": missing,
             "message": question,
             "model_plan": turn.model_plan.__dict__ if turn.model_plan else {},
@@ -825,46 +807,20 @@ async def run_turn(
 async def _run_agent_loop(
     state: V2SessionState, turn: NormalizedTurn
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run bounded V2 planning and action steps for one user turn."""
+    """Run bounded V2 single-agent tool-choice steps for one user turn."""
     for step_index in range(MAX_AGENT_STEPS):
-        plan = _deterministic_plan(turn)
-        if plan is None:
-            if state.llm_context is None:
-                try:
-                    state.llm_context = await build_llm_context(
-                        turn.run_uuid or "v2-agent", "turn execution"
-                    )
-                except Exception as exc:  # pylint: disable=broad-exception-caught
-                    yield event(
-                        state.session_id,
-                        "tool.failed",
-                        {
-                            "tool_id": f"tool_{uuid4().hex}",
-                            "name": "setup_llm_context",
-                            "error": str(exc),
-                            "agent_step": step_index,
-                        },
-                    )
-                    yield event(
-                        state.session_id,
-                        "chat.message",
-                        _message_payload(
-                            "assistant", f"Aegis could not set up LLM access: {exc}"
-                        ),
-                    )
-                    return
+        if state.llm_context is None:
             try:
-                plan = await plan_turn(
-                    turn, state.conversation_context, state.llm_context
+                state.llm_context = await build_llm_context(
+                    turn.run_uuid or "v2-agent", "turn execution"
                 )
-                plan = _effective_plan(plan, turn)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 yield event(
                     state.session_id,
                     "tool.failed",
                     {
                         "tool_id": f"tool_{uuid4().hex}",
-                        "name": "plan_turn",
+                        "name": "setup_llm_context",
                         "error": str(exc),
                         "agent_step": step_index,
                     },
@@ -873,14 +829,38 @@ async def _run_agent_loop(
                     state.session_id,
                     "chat.message",
                     _message_payload(
-                        "assistant", f"Aegis could not plan the next step: {exc}"
+                        "assistant", f"Aegis could not set up LLM access: {exc}"
                     ),
                 )
                 return
 
+        try:
+            decision = await run_agent_step(
+                turn, state.conversation_context, state.llm_context
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            yield event(
+                state.session_id,
+                "tool.failed",
+                {
+                    "tool_id": f"tool_{uuid4().hex}",
+                    "name": "agent_step",
+                    "error": str(exc),
+                    "agent_step": step_index,
+                },
+            )
+            yield event(
+                state.session_id,
+                "chat.message",
+                _message_payload(
+                    "assistant", f"Aegis could not decide the next step: {exc}"
+                ),
+            )
+            return
+
         outcome = AgentStepOutcome()
-        async for item in _run_planned_action(
-            state, turn, plan, outcome=outcome, step_index=step_index
+        async for item in _run_agent_decision(
+            state, turn, decision, outcome=outcome, step_index=step_index
         ):
             yield item
 
@@ -893,7 +873,7 @@ async def _run_agent_loop(
         {
             "tool_id": f"tool_{uuid4().hex}",
             "name": "agent_loop",
-            "error": "Aegis reached its V2 planning loop limit before completing the turn.",
+            "error": "Aegis reached its V2 agent loop limit before completing the turn.",
             "max_steps": MAX_AGENT_STEPS,
         },
     )
@@ -902,69 +882,133 @@ async def _run_agent_loop(
         "chat.message",
         _message_payload(
             "assistant",
-            "Aegis reached its planning loop limit before completing the turn.",
+            "Aegis reached its agent loop limit before completing the turn.",
         ),
     )
 
 
-async def _run_planned_action(
+async def _run_agent_decision(
     state: V2SessionState,
     turn: NormalizedTurn,
-    plan: TurnPlan,
+    decision: AgentDecision,
     *,
     outcome: AgentStepOutcome,
     step_index: int,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Execute one model-selected action and set the step outcome."""
-    if plan.action == "availability":
-        async for item in _run_availability_turn(state, turn):
+    """Execute one single-agent direct answer or tool call."""
+    if decision.kind == "direct":
+        async for item in _run_direct_response(state, turn, decision.content):
+            yield item
+        outcome.status = "complete"
+        outcome.reason = "direct_response_completed"
+        return
+
+    if decision.tool_call is None:
+        yield event(
+            state.session_id,
+            "tool.failed",
+            {
+                "tool_id": f"tool_{uuid4().hex}",
+                "name": "agent_step",
+                "error": "Aegis returned a tool decision without a tool call.",
+                "agent_step": step_index,
+            },
+        )
+        outcome.status = "error"
+        outcome.reason = "missing_tool_call"
+        return
+
+    async for item in _run_agent_tool_call(
+        state,
+        turn,
+        decision.tool_call,
+        outcome=outcome,
+        step_index=step_index,
+    ):
+        yield item
+
+
+async def _run_agent_tool_call(
+    state: V2SessionState,
+    turn: NormalizedTurn,
+    tool_call: AgentToolCall,
+    *,
+    outcome: AgentStepOutcome,
+    step_index: int,
+) -> AsyncIterator[dict[str, Any]]:
+    """Execute one tool selected by the single agent."""
+    arguments = tool_call.arguments
+
+    if tool_call.name == "check_data_availability":
+        availability_turn = _availability_turn_from_arguments(turn, arguments)
+        async for item in _run_availability_turn(state, availability_turn):
             yield item
         outcome.status = "complete"
         outcome.reason = "availability_completed"
         return
 
-    if plan.action == "conversation":
-        async for item in _run_general_turn(state, turn):
-            yield item
-        outcome.status = "complete"
-        outcome.reason = "conversation_completed"
-        return
-
-    if plan.action == "clarify":
-        missing = (
-            plan.missing_scope or _missing_research_scope(turn) or ["research_question"]
-        )
-        async for item in _run_clarification_turn(
-            state,
-            turn,
-            missing,
-            question=plan.clarification_question,
-            options=plan.clarification_options,
-        ):
-            yield item
+    if tool_call.name == "ask_clarification":
+        question = str(arguments.get("question") or "").strip()
+        missing = _string_list(arguments.get("missing_scope")) or ["research_question"]
+        options = _clarification_options(arguments)
+        if str(arguments.get("presentation") or "message") == "widget" or options:
+            async for item in _run_clarification_turn(
+                state,
+                turn,
+                missing,
+                question=question or None,
+                options=options,
+            ):
+                yield item
+        else:
+            async for item in _run_plain_clarification_turn(
+                state,
+                turn,
+                missing,
+                question or _clarification_question(missing),
+            ):
+                yield item
         outcome.status = "awaiting_user"
         outcome.reason = "clarification_requested"
         return
 
-    missing = _missing_research_scope(turn)
-    if missing:
-        async for item in _run_clarification_turn(
-            state,
-            turn,
-            missing,
-            question=plan.clarification_question,
-            options=plan.clarification_options,
-        ):
-            yield item
-        outcome.status = "awaiting_user"
-        outcome.reason = "research_scope_missing"
+    if tool_call.name == "run_research":
+        research_turn = _research_turn_from_arguments(turn, arguments)
+        missing = _missing_research_scope(research_turn)
+        if not research_turn.content:
+            missing.append("research_question")
+        if missing:
+            async for item in _run_clarification_turn(
+                state,
+                research_turn,
+                missing,
+                question=None,
+                options=[],
+            ):
+                yield item
+            outcome.status = "awaiting_user"
+            outcome.reason = "research_scope_missing"
+            return
+
+        if research_turn.search_mode == "deep":
+            async for item in _run_deep_research_turn(state, research_turn):
+                yield item
+        else:
+            async for item in _run_quick_research_turn(state, research_turn):
+                yield item
+        outcome.status = "complete"
+        outcome.reason = "research_completed"
         return
 
-    if turn.search_mode == "deep":
-        async for item in _run_deep_research_turn(state, turn):
-            yield item
-    else:
-        async for item in _run_quick_research_turn(state, turn):
-            yield item
-    outcome.status = "complete"
-    outcome.reason = "research_completed"
+    yield event(
+        state.session_id,
+        "tool.failed",
+        {
+            "tool_id": f"tool_{uuid4().hex}",
+            "name": "agent_step",
+            "error": f"Unsupported agent tool call: {tool_call.name}",
+            "agent_step": step_index,
+        },
+    )
+    outcome.status = "error"
+    outcome.reason = "unsupported_tool"
