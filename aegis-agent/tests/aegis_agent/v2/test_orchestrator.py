@@ -10,11 +10,13 @@ from aegis_agent.v2.agent.conversation import (
     ContextFinalResponse,
     ConversationContext,
 )
+from aegis_agent.v2.agent.models import normalize_turn
 from aegis_agent.v2.agent.retrieval import RetrievalResult
 from aegis_agent.v2.agent.tool_agent import AgentDecision, AgentToolCall
 from aegis_agent.v2.orchestrator import (
     MAX_AGENT_STEPS,
     V2SessionState,
+    _run_quick_research_turn,
     event,
     run_turn,
 )
@@ -452,6 +454,50 @@ async def test_agent_can_ask_plain_clarification_message(monkeypatch) -> None:
     assert [event["type"] for event in events] == ["tool.completed", "chat.message"]
     assert events[0]["payload"]["presentation"] == "message"
     assert events[-1]["payload"]["content"] == "Which fiscal year should I use?"
+
+
+@pytest.mark.asyncio
+async def test_unscoped_quick_research_clarifies_instead_of_failing(
+    monkeypatch,
+) -> None:
+    """Quick retrieval should not leak its internal scope exception to chat."""
+
+    async def fake_optional_context(_filters):
+        return DataAvailabilityResponse(rows=[], fiscal_years=[], quarters=[])
+
+    async def fail_retrieve_quick_evidence(*_args, **_kwargs):
+        raise AssertionError("unscoped quick search should ask for clarification first")
+
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.optional_context",
+        fake_optional_context,
+    )
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.retrieve_quick_evidence",
+        fail_retrieve_quick_evidence,
+    )
+
+    state = V2SessionState(session_id="session_test")
+    events = [
+        event
+        async for event in _run_quick_research_turn(
+            state,
+            normalize_turn(
+                {"content": "compare capital trends", "filters": {"source_ids": ["rts"]}}
+            ),
+        )
+    ]
+
+    assert [event["type"] for event in events] == [
+        "tool.completed",
+        "widget.completed",
+    ]
+    assert events[0]["payload"]["name"] == "ask_clarification"
+    assert events[0]["payload"]["missing_scope"] == [
+        "bank",
+        "fiscal_year",
+        "quarter",
+    ]
 
 
 @pytest.mark.asyncio

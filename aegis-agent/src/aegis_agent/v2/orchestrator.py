@@ -594,6 +594,18 @@ async def _run_quick_research_turn(
     state: V2SessionState, turn: NormalizedTurn
 ) -> AsyncIterator[dict[str, Any]]:
     """Run quick evidence retrieval, create an artifact, then stream synthesis."""
+    missing = _missing_research_scope(turn)
+    if missing:
+        async for item in _run_clarification_turn(
+            state,
+            turn,
+            missing,
+            question=None,
+            options=[],
+        ):
+            yield item
+        return
+
     tool_id = f"tool_{uuid4().hex}"
     yield event(
         state.session_id,
