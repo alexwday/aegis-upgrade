@@ -1,0 +1,18 @@
+# V2 Agent Gap Backlog
+
+This backlog tracks the remaining work from the original V2 agent plan and the
+follow-up implementation discussion. Work through these items in order unless a
+later dependency forces resequencing.
+
+| # | Issue | Status | Notes |
+| --- | --- | --- | --- |
+| 1 | Deep research is still a temporary V1 bridge. | Partial | V1 source research now respects the V2 research model tier mapping. Full prompt/tool/source validation remains. |
+| 2 | Quick research is not yet the full mature retrieval process. | Partial | Quick now uses strict V1 query prep, embeddings, multi-strategy search, rerank, fused scoring, and page/sheet gap-fill primitives for scoped bank/period contexts. The old direct vector/text shortcut code was removed. Remaining work is live per-source validation and deciding whether unscoped quick search should ask a clarifying question or use a separate bounded path. |
+| 3 | V1 review checklist exists, but the review is not complete. | Complete | V1 prompts, tools, source adapters, UI events, artifact paths, and deferred chart/report paths are classified in `v1_agent_review_checklist.md` as keep/adapt/replace/defer with follow-up implementation order. |
+| 4 | Conversation intelligence is basic. | Partial | V2 now loads recent messages, final-shell summaries, persisted widgets, and artifact metadata as structured context; prior-answer/artifact follow-ups route to general conversation instead of defaulting into quick research. Remaining work is richer artifact-content context and a V2-native router. |
+| 5 | Final response shell is wired but not fully productized. | Partial | Metric tiles now prefer source-backed observations from deep research `metric` fields and quick evidence chunks, including evidence ids. Remaining work is better metric ranking, richer citation rendering, and answer-body reference handling. |
+| 6 | Runtime/process monitor taxonomy is basic. | Partial | V2 process rows now use a stable `V2_*` stage namespace, normalized Running/Success/Failure statuses, and `aegis.v2.process_monitor.v1` metadata with safe payload summaries. Remaining work is full lifecycle timing plus LLM token/cost accounting. |
+| 7 | Research artifact templates are first-pass. | Partial | Quick/deep artifacts now use shared layout, source/file grouping, source preview/download links where metadata exists, metric/evidence/table/citation rendering, and source gap sections. Remaining work is parent-viewer link handling and richer source reference payloads. |
+| 8 | Full report-generation path is not implemented. | Open | Report generation and chart creation remain deferred. |
+| 9 | Widget reload works only for newly created widgets. | Partial | Bootstrap and conversation detail now expose typed `chat_items` so persisted widget messages hydrate as renderable widgets without clients parsing hidden marker strings. Remaining limitation: older conversations that never stored the full widget payload cannot be losslessly migrated from process monitor summaries alone. |
+| 10 | API contract is still WebSocket-first and not fully documented. | Complete | Current WebSocket-first request/event contract is documented in `v2_api_contract.md`, canonical request schemas are validated in tests, and the runtime contract CSV now reflects implemented `/api/v2/ws` behavior. Future POST/SSE and reference-resolver endpoints remain deferred features, not first-slice gaps. |

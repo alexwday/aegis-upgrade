@@ -1,0 +1,10 @@
+section,order,section_notes
+Identity & Relationship Keys,1,Stable row anchors and foreign-key links shared across schemas.
+UI Labels & Descriptors,2,Human-facing names descriptions and labels used by filters context selectors chat rows and viewer tiles.
+Period & Availability,3,Fiscal year quarter and coverage fields that determine which sources are available for each bank.
+Storage & Content,4,Source file identifiers chunk text enrichment JSON and embedding vectors used by retrieval.
+Query & Conversation Runtime,5,User session query and chat-message state used during active conversations.
+Generated Outputs & Viewer Artifacts,6,Agent-generated HTML reports widgets and viewer targets surfaced by the UI.
+Process Monitor & Agent State,7,Query run stage events status updates and operational visibility.
+Prompt & Tool Configuration,8,Prompt inventory versioning and tool routing configuration.
+State & Audit,9,Lifecycle status timestamps and operational audit fields used for ordering debugging and maintenance.

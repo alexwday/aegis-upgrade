@@ -17,13 +17,20 @@ trust. Those visible controls and states should become the tool contracts the
 agent can call. This keeps the agent focused on operating a well-defined
 research workstation instead of improvising the product shape turn by turn.
 
+## Current Layout
+
+- `aegis-agent/`: active V2 agent working copy, initially forked from the V1 agent.
+- `aegis-prompts/`: clean V2 prompt workspace.
+- `aegis-table-schemas/`: clean V2 SQL schema workspace.
+- `archive/v1/`: frozen V1 agent, prompt archive, and table schema exports.
+
 ## Preserve
 
 - `aegis-documents/`: canonical source files and folder conventions.
 - `aegis-pipeline/`: ETL, chunking, enrichment, embedding, and load flow.
-- `aegis-table-schemas/`: PostgreSQL table contracts.
+- `archive/v1/aegis-table-schemas/`: V1 PostgreSQL table contracts.
 - `scripts/`: setup, table creation, loading, prompt sync, and source registry.
-- `aegis-prompts/`: prompt archive, especially source ETL/retrieval prompts.
+- `archive/v1/aegis-prompts/`: prompt archive, especially source ETL/retrieval prompts.
 - `aegis-agent/src/aegis_agent/connections/`: LLM, PostgreSQL, OAuth patterns.
 - `aegis-agent/src/aegis_agent/utils/`: settings, logging, SSL, prompt loading.
 - `aegis-agent/src/aegis_agent/model/subagents/`: current retrieval logic, at
@@ -52,4 +59,6 @@ research workstation instead of improvising the product shape turn by turn.
 - [V1 Archive Boundary](./v1_archive_boundary.md)
 - [UI-First Design Plan](./ui_first_design_plan.md)
 - [Retrieval Tooling Plan](./retrieval_tooling_plan.md)
-
+- [V2 Runtime API Contract](./v2_api_contract.md)
+- [V2 Workstation Update Script](./v2_workstation_update.md)
+- [Runtime Schema Field Map](./aegis_runtime_schema_field_map.xlsx)

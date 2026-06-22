@@ -1,0 +1,4323 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Functions Assist</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f8fb;
+        --panel: #ffffff;
+        --text: #17202a;
+        --muted: #64748b;
+        --line: #e1e7ef;
+        --line-dark: #17355f;
+        --accent: #005daa;
+        --accent-dark: #062b60;
+        --soft: #eef6ff;
+        --soft-2: #f8fafc;
+        --danger: #b42318;
+        --shadow: 0 18px 46px rgba(15, 23, 42, 0.07);
+        --aegis-navy: #062b60;
+        --aegis-blue: #005daa;
+        --aegis-cyan: #00a6d6;
+        --aegis-gold: #fdb515;
+        --aegis-ice: #f3f8fd;
+        --aegis-line: rgba(0, 93, 170, 0.18);
+        --aegis-glow: 0 18px 42px rgba(6, 43, 96, 0.12);
+        --generated-surface: linear-gradient(
+          135deg,
+          rgba(6, 43, 96, 0.98) 0%,
+          rgba(0, 93, 170, 0.96) 52%,
+          rgba(4, 39, 77, 0.98) 100%
+        );
+        --generated-line: rgba(255, 255, 255, 0.16);
+        --generated-soft: rgba(255, 255, 255, 0.08);
+        --generated-soft-strong: rgba(255, 255, 255, 0.14);
+        --generated-text: #ffffff;
+        --generated-muted: rgba(255, 255, 255, 0.74);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        letter-spacing: 0;
+        -webkit-font-smoothing: antialiased;
+        text-rendering: geometricPrecision;
+      }
+
+      .app {
+        display: grid;
+        grid-template-columns: minmax(520px, 0.94fr) minmax(390px, 0.66fr);
+        gap: 12px;
+        height: 100vh;
+        max-width: 1540px;
+        margin: 0 auto;
+        padding: 14px;
+      }
+
+      .chat {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        min-height: 0;
+        background: var(--panel);
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 10px;
+        box-shadow: var(--shadow);
+      }
+
+      .source-preview {
+        display: grid;
+        grid-template-rows: auto auto auto minmax(0, 1fr);
+        min-width: 0;
+        min-height: 0;
+        background: var(--panel);
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        border-radius: 10px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .preview-titlebar,
+      .preview-locationbar,
+      .preview-actionbar {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        min-width: 0;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .preview-titlebar {
+        justify-content: space-between;
+        padding: 10px 11px;
+      }
+
+      .preview-title-text,
+      .preview-location-text {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+
+      .preview-kicker,
+      .preview-location-kind {
+        color: var(--muted);
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        line-height: 1;
+        text-transform: uppercase;
+      }
+
+      .preview-document-title,
+      .preview-location-title {
+        min-width: 0;
+        color: var(--aegis-navy);
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1.25;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .preview-recent {
+        position: relative;
+        flex: 0 0 auto;
+      }
+
+      .preview-recent-button,
+      .preview-icon-button,
+      .preview-download {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 32px;
+        min-height: 30px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #ffffff;
+        color: var(--aegis-navy);
+        font-size: 12px;
+        font-weight: 800;
+        line-height: 1;
+        text-decoration: none;
+      }
+
+      .preview-recent-button {
+        gap: 5px;
+        min-width: 76px;
+      }
+
+      .preview-icon-button:disabled,
+      .preview-recent-button:disabled,
+      .preview-download.disabled {
+        cursor: not-allowed;
+        opacity: 0.42;
+      }
+
+      .preview-recent-menu {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        z-index: 4;
+        display: grid;
+        gap: 3px;
+        width: min(330px, 78vw);
+        padding: 6px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #ffffff;
+        box-shadow: 0 18px 42px rgba(15, 23, 42, 0.14);
+      }
+
+      .preview-recent-menu[hidden] {
+        display: none;
+      }
+
+      .preview-recent-item {
+        display: grid;
+        gap: 2px;
+        width: 100%;
+        min-height: 42px;
+        padding: 7px;
+        border: 0;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text);
+        text-align: left;
+      }
+
+      .preview-recent-item:hover {
+        background: var(--soft);
+      }
+
+      .preview-recent-item strong,
+      .preview-recent-item span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .preview-recent-item strong {
+        font-size: 11px;
+      }
+
+      .preview-recent-item span {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      .preview-locationbar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        padding: 8px 10px;
+        background: var(--soft-2);
+      }
+
+      .preview-actionbar {
+        justify-content: space-between;
+        padding: 8px 10px;
+      }
+
+      .preview-zoom-controls {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .preview-zoom-label {
+        min-width: 44px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        text-align: center;
+      }
+
+      .preview-frame-shell {
+        min-width: 0;
+        min-height: 0;
+        overflow: auto;
+        background: #dfe6ee;
+      }
+
+      .source-preview-frame {
+        display: block;
+        width: 100%;
+        height: 100%;
+        min-height: 0;
+        border: 0;
+        background: #ffffff;
+        transform-origin: 0 0;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.82);
+      }
+
+      .brand {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+      }
+
+      .brand h1 {
+        margin: 0;
+        color: var(--aegis-navy);
+        font-size: 16px;
+        font-weight: 760;
+        line-height: 1.15;
+      }
+
+      .brand span,
+      .connection {
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+      }
+
+      .connection {
+        padding: 4px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--soft-2);
+        white-space: nowrap;
+      }
+
+      .messages {
+        overflow-y: auto;
+        padding: 16px 18px;
+      }
+
+      .message {
+        display: grid;
+        gap: 6px;
+        max-width: 860px;
+        margin-bottom: 14px;
+      }
+
+      .message.user {
+        margin-left: auto;
+        justify-items: end;
+      }
+
+      .message-label {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 750;
+        text-transform: uppercase;
+      }
+
+      .bubble {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        line-height: 1.45;
+        font-size: 13px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .message.user .bubble {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #ffffff;
+      }
+
+      .message.error .bubble {
+        background: #fff4f2;
+        border-color: #ffd6d1;
+        color: var(--danger);
+      }
+
+      .assistant-turn {
+        display: grid;
+        gap: 9px;
+        max-width: 880px;
+        margin: 0 0 16px;
+      }
+
+      .response-frame {
+        display: grid;
+        gap: 9px;
+        padding: 10px;
+        border: 1px solid rgba(0, 93, 170, 0.12);
+        border-radius: 10px;
+        background: linear-gradient(180deg, #ffffff 0%, #fbfcfb 100%);
+      }
+
+      .status-panel {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--generated-line);
+        border-radius: 7px;
+        background: var(--generated-surface);
+        box-shadow: var(--aegis-glow);
+        isolation: isolate;
+      }
+
+      .status-panel.hidden {
+        display: none;
+      }
+
+      .status-panel.complete {
+        border-color: var(--generated-line);
+        background: var(--generated-surface);
+      }
+
+      .status-panel.complete::before {
+        display: none;
+      }
+
+      .status-panel::before {
+        content: "";
+        position: absolute;
+        inset: -80px;
+        z-index: -1;
+        background: conic-gradient(
+          from 0deg,
+          rgba(255, 255, 255, 0),
+          rgba(255, 255, 255, 0),
+          rgba(0, 166, 214, 0.9),
+          rgba(253, 181, 21, 0.45),
+          rgba(255, 255, 255, 0)
+        );
+        animation: border-sweep 1.8s linear infinite;
+      }
+
+      .status-panel::after {
+        content: "";
+        position: absolute;
+        inset: 2px;
+        z-index: -1;
+        border-radius: 6px;
+        background: var(--generated-surface);
+      }
+
+      @keyframes border-sweep {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .status-toggle {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        min-height: 32px;
+        padding: 6px 9px;
+        border: 0;
+        background: transparent;
+        color: var(--generated-text);
+        text-align: left;
+      }
+
+      .loader {
+        position: relative;
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255, 255, 255, 0.2);
+        border-top-color: var(--aegis-cyan);
+        border-radius: 999px;
+        animation: spin 0.85s linear infinite;
+      }
+
+      .status-panel.complete .loader {
+        width: 8px;
+        height: 8px;
+        background: var(--aegis-cyan);
+        border-color: var(--aegis-cyan);
+        animation: none;
+      }
+
+      .status-panel.complete .loader::after {
+        display: none;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .status-text {
+        min-width: 0;
+        color: var(--generated-text);
+        font-size: 11px;
+        font-weight: 750;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .status-count {
+        color: var(--generated-muted);
+        font-size: 10px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .status-timeline {
+        display: grid;
+        gap: 7px;
+        max-height: 160px;
+        overflow-y: auto;
+        padding: 0 10px 10px 32px;
+      }
+
+      .status-panel:not(.collapsed) .status-timeline {
+        border-top: 1px solid var(--generated-line);
+        padding-top: 9px;
+      }
+
+      .status-panel.collapsed .status-timeline {
+        display: none;
+      }
+
+      .status-row {
+        display: grid;
+        gap: 2px;
+        color: var(--generated-muted);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+
+      .status-row strong {
+        color: var(--generated-text);
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+
+      .main-response {
+        min-height: 56px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #ffffff;
+        padding: 12px 13px;
+        line-height: 1.5;
+        font-size: 13.5px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .main-response.pending {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        background: var(--soft-2);
+      }
+
+      .main-response.pending::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--accent);
+      }
+
+      .main-response.status-feed {
+        display: block;
+        border-color: var(--generated-line);
+        color: var(--generated-text);
+        background: var(--generated-surface);
+        box-shadow: var(--aegis-glow);
+      }
+
+      .main-response.status-feed::before {
+        display: none;
+      }
+
+      .progress-log {
+        display: grid;
+        gap: 7px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .progress-entry {
+        display: grid;
+        gap: 2px;
+        padding-left: 15px;
+        position: relative;
+        color: var(--generated-muted);
+        font-size: 12px;
+        line-height: 1.4;
+      }
+
+      .progress-entry::before {
+        content: "";
+        position: absolute;
+        top: 0.62em;
+        left: 0;
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--accent);
+      }
+
+      .progress-entry strong {
+        color: var(--generated-text);
+        font-size: 11px;
+        text-transform: uppercase;
+      }
+
+      .research-status-board {
+        display: grid;
+        gap: 6px;
+      }
+
+      .research-status-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .research-status-title {
+        color: var(--generated-text);
+        font-size: 11px;
+        font-weight: 850;
+        text-transform: uppercase;
+      }
+
+      .research-status-updated {
+        color: var(--generated-muted);
+        font-size: 10px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .research-source-dot {
+        display: inline-block;
+        flex: 0 0 auto;
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: var(--generated-muted);
+      }
+
+      .research-status-row.checking .research-source-dot,
+      .research-status-row.in_progress .research-source-dot,
+      .research-status-row.incomplete .research-source-dot {
+        background: var(--aegis-gold);
+      }
+
+      .research-status-row.complete .research-source-dot,
+      .research-status-row.partial .research-source-dot {
+        background: var(--aegis-cyan);
+      }
+
+      .research-status-row.error .research-source-dot {
+        background: #ffb4a9;
+      }
+
+      .research-status-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+        border: 1px solid var(--generated-line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--generated-soft);
+      }
+
+      .research-status-table th,
+      .research-status-table td {
+        padding: 6px 8px;
+        border-bottom: 1px solid var(--generated-line);
+        color: var(--generated-muted);
+        font-size: 10.5px;
+        line-height: 1.35;
+        text-align: left;
+        vertical-align: top;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+
+      .research-status-table th {
+        background: var(--generated-soft-strong);
+        color: var(--generated-text);
+        font-size: 9px;
+        font-weight: 850;
+        text-transform: uppercase;
+      }
+
+      .research-status-table tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .research-status-table .source-col {
+        width: 22%;
+      }
+
+      .research-status-table .status-col {
+        width: 20%;
+      }
+
+      .research-status-source {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        max-width: 100%;
+      }
+
+      .research-source-name {
+        min-width: 0;
+        color: var(--generated-text);
+        font-size: 10px;
+        font-weight: 820;
+        line-height: 1.3;
+      }
+
+      .research-source-status {
+        color: var(--generated-text);
+        font-size: 10px;
+        font-weight: 780;
+        text-transform: uppercase;
+      }
+
+      .research-summary-body {
+        color: var(--generated-muted);
+        font-size: 10.5px;
+        line-height: 1.35;
+      }
+
+      .research-summary-empty {
+        color: var(--generated-muted);
+        font-size: 10.5px;
+        line-height: 1.3;
+      }
+
+      .main-response.empty {
+        display: none;
+      }
+
+      .main-response.document {
+        padding: 14px;
+        line-height: 1.55;
+        white-space: normal;
+      }
+
+      .main-response.document h1,
+      .main-response.document h2,
+      .main-response.document h3 {
+        margin: 8px 0 2px;
+        line-height: 1.25;
+      }
+
+      .main-response.document h1 {
+        font-size: 19px;
+      }
+
+      .main-response.document h2 {
+        font-size: 16px;
+      }
+
+      .main-response.document h3 {
+        font-size: 13px;
+      }
+
+      .main-response.polished {
+        padding: 0;
+        border: 0;
+        background: transparent;
+        white-space: normal;
+      }
+
+      .research-answer {
+        display: grid;
+        gap: 9px;
+      }
+
+      .answer-hero,
+      .metric-card {
+        border: 1px solid var(--aegis-line);
+        border-radius: 9px;
+        background: #ffffff;
+      }
+
+      .answer-hero {
+        position: relative;
+        display: grid;
+        gap: 9px;
+        overflow: hidden;
+        padding: 15px 16px;
+        color: #ffffff;
+        border-color: rgba(255, 255, 255, 0.16);
+        background: var(--generated-surface);
+        box-shadow: var(--aegis-glow);
+        isolation: isolate;
+      }
+
+      .answer-hero::before {
+        content: "";
+        position: absolute;
+        inset: -42% -28% -58% -24%;
+        z-index: -1;
+        background:
+          radial-gradient(82% 66% at 98% 3%, transparent 44%, rgba(0, 166, 214, 0.58) 45%, transparent 46.4%, transparent 53%, rgba(253, 181, 21, 0.44) 54%, transparent 55.3%, transparent 62%, rgba(255, 255, 255, 0.28) 63%, transparent 64.2%),
+          radial-gradient(90% 76% at 104% 1%, transparent 51%, rgba(82, 207, 255, 0.32) 52%, transparent 53.1%),
+          linear-gradient(145deg, transparent 0%, rgba(255, 255, 255, 0.08) 42%, transparent 66%);
+        opacity: 0.92;
+        transform: rotate(-7deg);
+      }
+
+      .answer-hero::after {
+        content: "";
+        position: absolute;
+        right: -12%;
+        bottom: -58%;
+        z-index: -1;
+        width: 58%;
+        height: 130%;
+        background: radial-gradient(circle, rgba(253, 181, 21, 0.22), transparent 62%);
+      }
+
+      .answer-hero > * {
+        position: relative;
+      }
+
+      .answer-eyebrow {
+        color: rgba(255, 255, 255, 0.74);
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .answer-headline {
+        margin: 0;
+        color: #ffffff;
+        font-size: 18px;
+        line-height: 1.22;
+        font-weight: 780;
+        max-width: 760px;
+      }
+
+      .answer-dek {
+        margin: 0;
+        max-width: 760px;
+        color: rgba(255, 255, 255, 0.78);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .citation-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 23px;
+        border-radius: 999px;
+        font-size: 10.5px;
+        font-weight: 750;
+        line-height: 1;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .metric-card {
+        position: relative;
+        display: grid;
+        gap: 6px;
+        min-height: 78px;
+        padding: 10px;
+        overflow: hidden;
+        border-color: rgba(0, 166, 214, 0.22);
+        background: linear-gradient(180deg, #f4fbff 0%, #e8f4fb 100%);
+        box-shadow: 0 14px 34px rgba(6, 43, 96, 0.1);
+      }
+
+      .metric-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, var(--aegis-cyan), var(--aegis-gold));
+      }
+
+      .metric-card::after {
+        display: none;
+      }
+
+      .metric-label {
+        position: relative;
+        color: #47708b;
+        font-size: 9.5px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .metric-value {
+        position: relative;
+        color: var(--aegis-navy);
+        font-size: 19px;
+        font-weight: 800;
+        line-height: 1;
+      }
+
+      .metric-context {
+        position: relative;
+        color: #5b7285;
+        font-size: 11px;
+        line-height: 1.32;
+      }
+
+      .answer-section {
+        padding: 2px 1px;
+      }
+
+      .final-body {
+        color: var(--text);
+        font-size: 13.5px;
+        line-height: 1.52;
+      }
+
+      .final-body.drafting {
+        display: grid;
+        align-items: center;
+        min-height: 40px;
+      }
+
+      .final-body.drafting::before {
+        content: "";
+        display: block;
+        width: min(360px, 72%);
+        height: 10px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #eef3f8 0%, #dfeaf5 42%, #eef3f8 84%);
+        background-size: 220% 100%;
+        animation: draft-pulse 1.15s ease-in-out infinite;
+      }
+
+      @keyframes draft-pulse {
+        to {
+          background-position: -220% 0;
+        }
+      }
+
+      .final-body.body-only {
+        min-height: 56px;
+      }
+
+      .final-body h1,
+      .final-body h2,
+      .final-body h3 {
+        margin: 9px 0 3px;
+        line-height: 1.25;
+      }
+
+      .final-body h1 {
+        font-size: 18px;
+      }
+
+      .final-body h2 {
+        font-size: 15.5px;
+      }
+
+      .final-body h3 {
+        font-size: 13px;
+      }
+
+      .final-body ul,
+      .evidence-content ul {
+        display: grid;
+        gap: 6px;
+        margin: 7px 0;
+        padding-left: 18px;
+      }
+
+      .final-body li,
+      .evidence-content li {
+        padding-left: 2px;
+      }
+
+      .research-table-wrap {
+        margin: 8px 0 10px;
+        overflow-x: auto;
+        max-width: 100%;
+        scrollbar-gutter: stable;
+        scrollbar-width: thin;
+        overscroll-behavior-x: contain;
+        -webkit-overflow-scrolling: touch;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #ffffff;
+      }
+
+      .research-table {
+        width: max(100%, var(--table-min-width, 420px));
+        min-width: var(--table-min-width, 420px);
+        border-collapse: collapse;
+        table-layout: fixed;
+        font-size: 12px;
+        line-height: 1.35;
+        white-space: normal;
+      }
+
+      .research-table th,
+      .research-table td {
+        padding: 7px 9px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+        overflow-wrap: break-word;
+        word-break: normal;
+      }
+
+      .research-table th {
+        background: #f5f8fb;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .research-table tr:last-child td {
+        border-bottom: 0;
+      }
+
+      .chart-card {
+        position: relative;
+        display: grid;
+        gap: 6px;
+        width: min(100%, 700px);
+        margin: 8px 0 10px;
+        overflow: hidden;
+        color: var(--generated-text);
+        border: 1px solid var(--generated-line);
+        border-radius: 8px;
+        background: var(--generated-surface);
+        box-shadow: 0 10px 26px rgba(6, 43, 96, 0.1);
+        isolation: isolate;
+      }
+
+      .chart-card::before {
+        content: "";
+        position: absolute;
+        inset: -62% -30% auto auto;
+        z-index: -1;
+        width: 68%;
+        height: 180%;
+        background:
+          radial-gradient(circle at 50% 50%, rgba(0, 166, 214, 0.35), transparent 56%),
+          radial-gradient(circle at 70% 64%, rgba(253, 181, 21, 0.22), transparent 52%);
+        transform: rotate(-12deg);
+      }
+
+      .chart-card.pending {
+        min-height: 172px;
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.03), rgba(0, 166, 214, 0.12), rgba(255, 255, 255, 0.03)),
+          var(--generated-surface);
+        background-size: 220% 100%;
+        animation: draft-pulse 1.15s ease-in-out infinite;
+      }
+
+      .chart-card.error {
+        border-color: rgba(255, 180, 169, 0.48);
+      }
+
+      .chart-head {
+        display: grid;
+        gap: 3px;
+        padding: 9px 10px 0;
+      }
+
+      .chart-title {
+        color: var(--generated-text);
+        font-size: 12.5px;
+        line-height: 1.25;
+        font-weight: 820;
+      }
+
+      .chart-subtitle {
+        color: var(--generated-muted);
+        font-size: 10.5px;
+        line-height: 1.35;
+        font-weight: 650;
+      }
+
+      .chart-frame {
+        position: relative;
+        min-height: 170px;
+        padding: 0 10px 8px;
+      }
+
+      .chart-svg {
+        display: block;
+        width: 100%;
+        min-height: 178px;
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: inset 0 0 0 1px rgba(6, 43, 96, 0.08);
+      }
+
+      .chart-grid {
+        stroke: rgba(6, 43, 96, 0.12);
+        stroke-width: 1;
+      }
+
+      .chart-axis-label,
+      .chart-tick {
+        fill: #64748b;
+        font-size: 10px;
+        font-weight: 650;
+      }
+
+      .chart-value-label {
+        fill: var(--aegis-navy);
+        font-size: 10px;
+        font-weight: 800;
+      }
+
+      .chart-bar {
+        fill: var(--aegis-cyan);
+        stroke: var(--aegis-navy);
+        stroke-width: 0.7;
+        transition: opacity 0.15s ease, filter 0.15s ease;
+      }
+
+      .chart-bar.featured {
+        fill: var(--aegis-gold);
+      }
+
+      .chart-bar:hover,
+      .chart-point:hover,
+      .chart-heat-cell:hover {
+        filter: brightness(0.94);
+        opacity: 0.86;
+      }
+
+      .chart-line {
+        fill: none;
+        stroke: var(--aegis-blue);
+        stroke-width: 3;
+      }
+
+      .chart-line.secondary {
+        stroke-width: 2;
+      }
+
+      .chart-area {
+        fill: rgba(0, 166, 214, 0.08);
+      }
+
+      .chart-point {
+        fill: var(--aegis-gold);
+        stroke: var(--aegis-navy);
+        stroke-width: 1.4;
+      }
+
+      .chart-heat-cell {
+        stroke: #ffffff;
+        stroke-width: 1.2;
+      }
+
+      .chart-average,
+      .chart-zero-line {
+        stroke: rgba(6, 43, 96, 0.42);
+        stroke-width: 1.2;
+        stroke-dasharray: 4 4;
+      }
+
+      .chart-connector {
+        fill: none;
+        stroke: rgba(6, 43, 96, 0.22);
+        stroke-width: 1.4;
+      }
+
+      .chart-segment {
+        stroke: rgba(255, 255, 255, 0.78);
+        stroke-width: 1;
+      }
+
+      .chart-waterfall-total {
+        fill: var(--aegis-navy);
+      }
+
+      .chart-waterfall-positive {
+        fill: var(--aegis-cyan);
+      }
+
+      .chart-waterfall-negative {
+        fill: #d65f59;
+      }
+
+      .chart-placeholder {
+        display: grid;
+        min-height: 160px;
+        align-items: center;
+        justify-items: center;
+        border: 1px solid var(--generated-line);
+        border-radius: 7px;
+        color: var(--generated-muted);
+        background: var(--generated-soft);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .chart-foot {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 10px 9px;
+        color: var(--generated-muted);
+        font-size: 10px;
+      }
+
+      .answer-section h3 {
+        margin: 3px 0 7px;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .answer-bullets {
+        display: grid;
+        gap: 7px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .answer-bullets li {
+        position: relative;
+        padding-left: 15px;
+        color: var(--text);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .answer-bullets li::before {
+        content: "";
+        position: absolute;
+        top: 0.68em;
+        left: 0;
+        width: 5px;
+        height: 5px;
+        border-radius: 999px;
+        background: var(--accent);
+      }
+
+      .citation-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 6px;
+      }
+
+      .citation-chip {
+        padding: 4px 7px;
+        border: 1px solid var(--generated-line);
+        background: var(--generated-surface);
+        color: var(--generated-text);
+        box-shadow: 0 5px 12px rgba(6, 43, 96, 0.13);
+      }
+
+      a.citation-chip {
+        color: var(--generated-text);
+        text-decoration: none;
+      }
+
+      a.citation-chip:hover {
+        border-color: rgba(0, 166, 214, 0.58);
+        background: linear-gradient(135deg, rgba(0, 93, 170, 0.98), rgba(4, 39, 77, 0.98));
+      }
+
+      .final-body a {
+        color: #1b8fd6;
+      }
+
+      .final-body a.citation-chip {
+        border-color: rgba(0, 166, 214, 0.28);
+        background: #e9f7ff;
+        color: #1179bd;
+        box-shadow: 0 5px 12px rgba(0, 93, 170, 0.1);
+      }
+
+      .final-body a.citation-chip:hover {
+        border-color: rgba(0, 166, 214, 0.42);
+        background: #d8f1ff;
+        color: #005daa;
+      }
+
+      .evidence-stack {
+        display: block;
+      }
+
+      .evidence-stack.empty {
+        display: none;
+      }
+
+      .evidence-panel {
+        border: 1px solid var(--generated-line);
+        border-radius: 9px;
+        color: var(--generated-text);
+        background: var(--generated-surface);
+        overflow: hidden;
+        box-shadow: var(--aegis-glow);
+      }
+
+      .evidence-summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        width: 100%;
+        min-height: 32px;
+        padding: 7px 10px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--generated-text);
+        text-align: left;
+      }
+
+      .evidence-title {
+        color: var(--generated-text);
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+
+      .evidence-hint {
+        color: var(--generated-muted);
+        font-size: 10px;
+        font-weight: 650;
+        white-space: nowrap;
+      }
+
+      .evidence-panel.collapsed .evidence-tabs,
+      .evidence-panel.collapsed .evidence-content {
+        display: none;
+      }
+
+      .evidence-tabs {
+        display: flex;
+        align-items: end;
+        flex-wrap: wrap;
+        gap: 3px;
+        padding: 6px 8px 0;
+        border-top: 1px solid var(--generated-line);
+        border-bottom: 1px solid var(--generated-line);
+        background: var(--generated-soft);
+      }
+
+      .evidence-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        width: auto;
+        min-height: 27px;
+        margin-bottom: -1px;
+        padding: 5px 9px;
+        border: 1px solid var(--generated-line);
+        border-bottom-color: var(--generated-line);
+        border-radius: 6px 6px 0 0;
+        background: var(--generated-soft);
+        color: var(--generated-muted);
+        font-size: 11px;
+        font-weight: 750;
+        white-space: nowrap;
+      }
+
+      .evidence-tab::before {
+        display: none;
+      }
+
+      .evidence-tab[aria-expanded="true"] {
+        background: var(--generated-soft-strong);
+        border-color: rgba(255, 255, 255, 0.24);
+        border-bottom-color: transparent;
+        color: var(--generated-text);
+      }
+
+      .evidence-content {
+        border-top: 1px solid var(--generated-line);
+        max-height: 320px;
+        overflow-y: auto;
+        padding: 10px;
+        font-size: 12px;
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.84);
+        background: rgba(4, 39, 77, 0.66);
+      }
+
+      .evidence-content.empty {
+        display: none;
+      }
+
+      .evidence-content h3 {
+        color: var(--generated-text);
+        margin: 8px 0 6px;
+        font-size: 13px;
+      }
+
+      .evidence-content strong {
+        color: var(--generated-text);
+      }
+
+      .evidence-content .citation-chip {
+        background: var(--generated-soft-strong);
+      }
+
+      .evidence-content .research-table-wrap {
+        border-color: var(--generated-line);
+        background: var(--generated-soft);
+      }
+
+      .evidence-content .research-table {
+        color: var(--generated-text);
+      }
+
+      .evidence-content .research-table th,
+      .evidence-content .research-table td {
+        border-bottom-color: var(--generated-line);
+      }
+
+      .evidence-content .research-table th {
+        background: var(--generated-soft-strong);
+        color: var(--generated-muted);
+      }
+
+      .evidence-content .research-table td {
+        background: rgba(4, 39, 77, 0.42);
+      }
+
+      .evidence-content details.transcript-excerpt {
+        border-color: var(--generated-line);
+        background: var(--generated-soft);
+      }
+
+      details.transcript-excerpt {
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        margin: 7px 0;
+        padding: 8px 9px;
+        background: var(--soft-2);
+      }
+
+      details.transcript-excerpt summary {
+        cursor: pointer;
+        font-weight: 700;
+      }
+
+      .choice {
+        width: min(100%, 700px);
+        padding: 10px;
+        border: 1px solid var(--generated-line);
+        border-radius: 9px;
+        background: var(--generated-surface);
+        color: var(--generated-text);
+        box-shadow: var(--aegis-glow);
+      }
+
+      .choice h3 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        line-height: 1.25;
+      }
+
+      .choice-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        align-items: start;
+        gap: 6px;
+      }
+
+      .choice button {
+        display: grid;
+        align-content: center;
+        gap: 2px;
+        min-height: 44px;
+        max-height: 74px;
+        padding: 7px 9px;
+        border-color: var(--generated-line);
+        border-radius: 7px;
+        background: var(--generated-soft);
+        color: var(--generated-text);
+        text-align: left;
+        overflow: hidden;
+      }
+
+      .choice-title {
+        display: block;
+        font-weight: 750;
+        overflow-wrap: anywhere;
+      }
+
+      .choice-desc {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        color: var(--generated-muted);
+        font-size: 10px;
+        line-height: 1.25;
+        overflow: hidden;
+        overflow-wrap: anywhere;
+      }
+
+      .choice button:hover .choice-desc {
+        color: #e8fffb;
+      }
+
+      .choice.selected button:not(.selected-option) {
+        opacity: 0.5;
+      }
+
+      .composer {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        padding: 10px;
+        border-top: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.86);
+      }
+
+      .source-filter {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        min-width: 0;
+        flex-wrap: wrap;
+      }
+
+      .source-filter-label {
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 800;
+        text-transform: uppercase;
+        white-space: nowrap;
+      }
+
+      .source-preset,
+      .source-option {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #ffffff;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 750;
+        line-height: 1.1;
+        white-space: nowrap;
+      }
+
+      .source-preset {
+        color: var(--text);
+      }
+
+      .source-preset[aria-pressed="true"],
+      .source-option:has(input:checked) {
+        border-color: rgba(0, 93, 170, 0.42);
+        background: var(--soft);
+        color: var(--aegis-navy);
+      }
+
+      .source-options {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+        flex-wrap: wrap;
+      }
+
+      .source-option input {
+        width: 13px;
+        height: 13px;
+        margin: 0;
+        accent-color: var(--accent);
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 38px;
+        max-height: 120px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 9px 11px;
+        color: var(--text);
+        font: inherit;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      textarea:focus,
+      button:focus-visible {
+        outline: 2px solid rgba(0, 93, 170, 0.28);
+        outline-offset: 2px;
+      }
+
+      button {
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        background: #ffffff;
+        color: var(--text);
+        cursor: pointer;
+        font: inherit;
+        font-weight: 750;
+      }
+
+      .send {
+        min-width: 78px;
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #ffffff;
+        font-size: 13px;
+      }
+
+      .send:hover,
+      .choice button:hover {
+        background: var(--accent-dark);
+        border-color: var(--accent-dark);
+        color: #ffffff;
+      }
+
+      @media (max-width: 900px) {
+        .app {
+          grid-template-columns: 1fr;
+          height: auto;
+          min-height: 100vh;
+        }
+
+        .chat {
+          min-height: 72vh;
+        }
+
+        .source-preview {
+          min-height: 72vh;
+        }
+      }
+
+      @media (max-width: 560px) {
+        .app {
+          padding: 9px;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .choice-grid,
+        .metric-grid,
+        .composer {
+          grid-template-columns: 1fr;
+        }
+
+        .source-filter {
+          align-items: stretch;
+        }
+
+        .source-options {
+          width: 100%;
+        }
+
+        .response-frame {
+          padding: 10px;
+        }
+
+        .send {
+          min-height: 40px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <section class="chat">
+        <header class="topbar">
+          <div class="brand">
+            <h1>Functions Assist</h1>
+            <span>AEGIS - External Research and Analysis</span>
+          </div>
+          <div id="connection" class="connection">Connecting</div>
+        </header>
+
+        <div id="messages" class="messages"></div>
+
+        <form id="composer" class="composer">
+          <div class="source-filter" aria-label="Data source filter">
+            <span class="source-filter-label">Sources</span>
+            <button
+              id="sourceDefault"
+              class="source-preset"
+              type="button"
+              aria-pressed="true"
+            >
+              Auto
+            </button>
+            <div id="sourceOptions" class="source-options">
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="transcripts" />
+                <span>Transcripts</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="event_transcripts" />
+                <span>Event transcripts</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="investor_slides" />
+                <span>Investor slides</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="supplementary_financials" />
+                <span>Supplementary financials</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="rts" />
+                <span>Reports to shareholders</span>
+              </label>
+              <label class="source-option">
+                <input type="checkbox" name="source-filter" value="pillar3" />
+                <span>Pillar 3</span>
+              </label>
+            </div>
+          </div>
+          <textarea id="input" placeholder="Ask about Q1 2026 Canadian bank disclosures, slides, or regulatory reports"></textarea>
+          <button class="send" type="submit">Send</button>
+        </form>
+      </section>
+      <aside id="sourcePreview" class="source-preview" aria-label="Source document preview">
+        <div class="preview-titlebar">
+          <div class="preview-title-text">
+            <span class="preview-kicker">Source preview</span>
+            <strong id="previewDocumentTitle" class="preview-document-title">No document open</strong>
+          </div>
+          <div class="preview-recent">
+            <button
+              id="previewRecentButton"
+              class="preview-recent-button"
+              type="button"
+              aria-expanded="false"
+              disabled
+              title="Recently opened documents"
+            >
+              Recent ▾
+            </button>
+            <div id="previewRecentMenu" class="preview-recent-menu" hidden></div>
+          </div>
+        </div>
+        <div class="preview-locationbar">
+          <button
+            id="previewPrevious"
+            class="preview-icon-button"
+            type="button"
+            aria-label="Previous page or sheet"
+            title="Previous"
+            disabled
+          >
+            ‹
+          </button>
+          <div class="preview-location-text">
+            <span id="previewLocationKind" class="preview-location-kind">Location</span>
+            <strong id="previewLocationTitle" class="preview-location-title">No reference selected</strong>
+          </div>
+          <button
+            id="previewNext"
+            class="preview-icon-button"
+            type="button"
+            aria-label="Next page or sheet"
+            title="Next"
+            disabled
+          >
+            ›
+          </button>
+        </div>
+        <div class="preview-actionbar">
+          <div class="preview-zoom-controls" aria-label="Preview zoom controls">
+            <button
+              id="previewZoomOut"
+              class="preview-icon-button"
+              type="button"
+              aria-label="Zoom out"
+              title="Zoom out"
+              disabled
+            >
+              −
+            </button>
+            <span id="previewZoomLabel" class="preview-zoom-label">100%</span>
+            <button
+              id="previewZoomIn"
+              class="preview-icon-button"
+              type="button"
+              aria-label="Zoom in"
+              title="Zoom in"
+              disabled
+            >
+              +
+            </button>
+          </div>
+          <a
+            id="previewDownload"
+            class="preview-download disabled"
+            href="#"
+            aria-disabled="true"
+            title="Download original document"
+          >
+            Download
+          </a>
+        </div>
+        <div id="previewFrameShell" class="preview-frame-shell">
+          <iframe
+            id="sourcePreviewFrame"
+            class="source-preview-frame"
+            title="Current source document preview"
+          ></iframe>
+        </div>
+      </aside>
+    </main>
+
+    <script>
+      const messages = document.getElementById("messages");
+      const connection = document.getElementById("connection");
+      const composer = document.getElementById("composer");
+      const input = document.getElementById("input");
+      const sourceDefault = document.getElementById("sourceDefault");
+      const sourceCheckboxes = Array.from(
+        document.querySelectorAll('input[name="source-filter"]'),
+      );
+      const previewDocumentTitle = document.getElementById("previewDocumentTitle");
+      const previewRecentButton = document.getElementById("previewRecentButton");
+      const previewRecentMenu = document.getElementById("previewRecentMenu");
+      const previewLocationKind = document.getElementById("previewLocationKind");
+      const previewLocationTitle = document.getElementById("previewLocationTitle");
+      const previewPrevious = document.getElementById("previewPrevious");
+      const previewNext = document.getElementById("previewNext");
+      const previewZoomOut = document.getElementById("previewZoomOut");
+      const previewZoomIn = document.getElementById("previewZoomIn");
+      const previewZoomLabel = document.getElementById("previewZoomLabel");
+      const previewDownload = document.getElementById("previewDownload");
+      const previewFrameShell = document.getElementById("previewFrameShell");
+      const sourcePreviewFrame = document.getElementById("sourcePreviewFrame");
+      let ws;
+      let activeTurn = null;
+      let currentUserRequest = "";
+      const previewState = {
+        current: null,
+        recent: [],
+        zoom: 1,
+      };
+      const previewPlaceholderHtml = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body {
+      align-items: center;
+      color: #64748b;
+      display: flex;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      height: 100vh;
+      justify-content: center;
+      margin: 0;
+    }
+  </style>
+</head>
+<body>No document open</body>
+</html>`;
+
+      sourcePreviewFrame.srcdoc = previewPlaceholderHtml;
+
+      function getSelectedSourceFilter() {
+        const selected = sourceCheckboxes
+          .filter((checkbox) => checkbox.checked)
+          .map((checkbox) => checkbox.value);
+        return selected.length ? selected : null;
+      }
+
+      function updateSourceFilterState() {
+        const hasFilter = Boolean(getSelectedSourceFilter());
+        sourceDefault.setAttribute("aria-pressed", String(!hasFilter));
+      }
+
+      sourceDefault.addEventListener("click", () => {
+        sourceCheckboxes.forEach((checkbox) => {
+          checkbox.checked = false;
+        });
+        updateSourceFilterState();
+      });
+
+      sourceCheckboxes.forEach((checkbox) => {
+        checkbox.addEventListener("change", updateSourceFilterState);
+      });
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#039;");
+      }
+
+      function positiveNumber(value) {
+        const parsed = Number.parseInt(value, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+      }
+
+      function urlForHref(href) {
+        try {
+          return new URL(String(href || ""), window.location.href);
+        } catch (_error) {
+          return null;
+        }
+      }
+
+      function hrefWithoutHash(href) {
+        const parsed = urlForHref(href);
+        if (!parsed) {
+          return String(href || "").split("#")[0];
+        }
+        parsed.hash = "";
+        if (parsed.origin === window.location.origin) {
+          return `${parsed.pathname}${parsed.search}`;
+        }
+        return parsed.toString();
+      }
+
+      function fileTypeForReference(reference = {}, href = "") {
+        const direct = String(reference.file_type || "").trim().toLowerCase();
+        if (direct) {
+          return direct;
+        }
+        const filename = String(reference.filename || href || "").toLowerCase();
+        const match = filename.match(/\.([a-z0-9]+)(?:[#?].*)?$/);
+        return match ? match[1] : "";
+      }
+
+      function targetFromHref(href) {
+        const parsed = urlForHref(href);
+        const hash = parsed?.hash || "";
+        const sheetMatch = hash.match(/sheet-(\d+)/i);
+        if (sheetMatch) {
+          return { kind: "sheet", number: positiveNumber(sheetMatch[1]) };
+        }
+        const pageMatch = hash.match(/page=(\d+)/i);
+        if (pageMatch) {
+          return { kind: "page", number: positiveNumber(pageMatch[1]) };
+        }
+        return { kind: "", number: null };
+      }
+
+      function targetForReference(reference, href, fileType) {
+        const target = targetFromHref(href);
+        if (target.number) {
+          return target;
+        }
+        const pageNumber = positiveNumber(reference?.page_number);
+        if (!pageNumber) {
+          return { kind: "", number: null };
+        }
+        if (fileType === "xlsx") {
+          return { kind: "sheet", number: pageNumber };
+        }
+        return { kind: fileType === "xml" ? "unit" : "page", number: pageNumber };
+      }
+
+      function fragmentForPreview(entry) {
+        const targetNumber = positiveNumber(entry?.target?.number);
+        if (!targetNumber) {
+          return "";
+        }
+        if (entry.fileType === "xlsx" || entry.target.kind === "sheet") {
+          return `sheet-${targetNumber}`;
+        }
+        const zoom = Math.round(previewState.zoom * 100);
+        return `page=${targetNumber}&zoom=${zoom}`;
+      }
+
+      function previewHrefForEntry(entry) {
+        if (!entry?.baseHref) {
+          return "";
+        }
+        const fragment = fragmentForPreview(entry);
+        return fragment ? `${entry.baseHref}#${fragment}` : entry.baseHref;
+      }
+
+      function downloadHrefForReference(reference, href) {
+        if (reference?.download_href) {
+          return reference.download_href;
+        }
+        const cleanHref = hrefWithoutHash(reference?.href || href || "");
+        if (cleanHref.endsWith("/preview")) {
+          return cleanHref.replace(/\/preview$/, "/download");
+        }
+        return cleanHref || "#";
+      }
+
+      function locationKindForEntry(entry) {
+        if (!entry) {
+          return "Location";
+        }
+        if (entry.fileType === "xlsx" || entry.target.kind === "sheet") {
+          return "Sheet";
+        }
+        if (entry.fileType === "xml" || entry.target.kind === "unit") {
+          return "Unit";
+        }
+        return "Page";
+      }
+
+      function locationTitleForEntry(entry) {
+        if (!entry) {
+          return "No reference selected";
+        }
+        const targetNumber = positiveNumber(entry.target?.number);
+        const fallback = targetNumber
+          ? `${locationKindForEntry(entry)} ${targetNumber}`
+          : "Document";
+        return entry.sheetName || entry.sectionName || entry.locationLabel || fallback;
+      }
+
+      function recentSubtitle(entry) {
+        const location = locationTitleForEntry(entry);
+        const source = entry.sourceLabel || "Source";
+        return location ? `${source} · ${location}` : source;
+      }
+
+      function setPreviewDownload(href) {
+        if (!href || href === "#") {
+          previewDownload.href = "#";
+          previewDownload.classList.add("disabled");
+          previewDownload.setAttribute("aria-disabled", "true");
+          previewDownload.removeAttribute("download");
+          return;
+        }
+        previewDownload.href = href;
+        previewDownload.classList.remove("disabled");
+        previewDownload.setAttribute("aria-disabled", "false");
+        previewDownload.setAttribute("download", "");
+      }
+
+      function renderRecentPreviewMenu() {
+        previewRecentButton.disabled = previewState.recent.length === 0;
+        previewRecentMenu.innerHTML = previewState.recent
+          .map(
+            (entry, index) => `<button class="preview-recent-item" type="button" data-recent-index="${index}">
+              <strong>${escapeHtml(entry.title)}</strong>
+              <span>${escapeHtml(recentSubtitle(entry))}</span>
+            </button>`,
+          )
+          .join("");
+      }
+
+      function rememberPreviewEntry(entry) {
+        const id = entry.id || entry.baseHref || entry.title;
+        previewState.recent = [
+          { ...entry, target: { ...entry.target }, id },
+          ...previewState.recent.filter((item) => (item.id || item.baseHref) !== id),
+        ].slice(0, 5);
+        renderRecentPreviewMenu();
+      }
+
+      function applyPreviewZoomMode() {
+        const entry = previewState.current;
+        const zoom = previewState.zoom;
+        previewZoomLabel.textContent = `${Math.round(zoom * 100)}%`;
+        if (entry?.fileType === "xlsx") {
+          sourcePreviewFrame.style.width = `${100 / zoom}%`;
+          sourcePreviewFrame.style.height = `${100 / zoom}%`;
+          sourcePreviewFrame.style.transform = `scale(${zoom})`;
+          return;
+        }
+        sourcePreviewFrame.style.width = "100%";
+        sourcePreviewFrame.style.height = "100%";
+        sourcePreviewFrame.style.transform = "none";
+      }
+
+      function renderPreviewState({ reload = false } = {}) {
+        const entry = previewState.current;
+        previewDocumentTitle.textContent = entry?.title || "No document open";
+        previewLocationKind.textContent = locationKindForEntry(entry);
+        previewLocationTitle.textContent = locationTitleForEntry(entry);
+        previewPrevious.disabled = !entry?.target?.number || entry.target.number <= 1;
+        previewNext.disabled = !entry?.target?.number;
+        previewZoomOut.disabled = !entry;
+        previewZoomIn.disabled = !entry;
+        setPreviewDownload(entry?.downloadHref || "");
+        applyPreviewZoomMode();
+
+        if (entry && reload) {
+          sourcePreviewFrame.removeAttribute("srcdoc");
+          sourcePreviewFrame.src = previewHrefForEntry(entry);
+          previewFrameShell.scrollTop = 0;
+          previewFrameShell.scrollLeft = 0;
+        }
+      }
+
+      function openSourcePreview(reference = {}, link = null) {
+        const href = String(reference.href || link?.getAttribute("href") || "").trim();
+        if (!href || href === "#") {
+          previewState.current = null;
+          sourcePreviewFrame.srcdoc = previewPlaceholderHtml;
+          renderPreviewState();
+          return false;
+        }
+
+        const fileType = fileTypeForReference(reference, href);
+        const target = targetForReference(reference, href, fileType);
+        const title =
+          reference.filename ||
+          reference.display_label ||
+          link?.textContent?.trim() ||
+          "Source document";
+        const entry = {
+          id: `${reference.source_id || link?.dataset.sourceKey || "source"}:${reference.file_id || href}`,
+          sourceLabel: reference.source_label || titleCaseSource(reference.source_id || link?.dataset.sourceKey || "source"),
+          title,
+          fileType,
+          href,
+          baseHref: hrefWithoutHash(href),
+          downloadHref: downloadHrefForReference(reference, href),
+          target,
+          locationLabel: reference.location_label || "",
+          sheetName: reference.sheet_name || "",
+          sectionName: reference.section_name || "",
+        };
+
+        previewState.current = entry;
+        previewState.zoom = 1;
+        rememberPreviewEntry(entry);
+        renderPreviewState({ reload: true });
+        return true;
+      }
+
+      function navigatePreviewLocation(direction) {
+        const entry = previewState.current;
+        const currentNumber = positiveNumber(entry?.target?.number);
+        if (!entry || !currentNumber) {
+          return;
+        }
+        const nextNumber = currentNumber + direction;
+        if (nextNumber < 1) {
+          return;
+        }
+        entry.target = { ...entry.target, number: nextNumber };
+        entry.locationLabel = "";
+        entry.sheetName = "";
+        entry.sectionName = "";
+        rememberPreviewEntry(entry);
+        renderPreviewState({ reload: true });
+      }
+
+      function setPreviewZoom(delta) {
+        if (!previewState.current) {
+          return;
+        }
+        const nextZoom = Math.min(2, Math.max(0.6, Number((previewState.zoom + delta).toFixed(2))));
+        if (nextZoom === previewState.zoom) {
+          return;
+        }
+        previewState.zoom = nextZoom;
+        if (previewState.current.fileType === "xlsx") {
+          renderPreviewState();
+          return;
+        }
+        renderPreviewState({ reload: true });
+      }
+
+      function syncPreviewLocationFromFrame() {
+        const entry = previewState.current;
+        const targetNumber = positiveNumber(entry?.target?.number);
+        if (!entry || entry.fileType !== "xlsx" || !targetNumber) {
+          return;
+        }
+        try {
+          const sheet = sourcePreviewFrame.contentDocument?.getElementById(`sheet-${targetNumber}`);
+          const heading = sheet?.querySelector("h2")?.textContent?.trim() || "";
+          const sheetName = heading.replace(/^Sheet\s+\d+:\s*/i, "").trim();
+          if (!sheetName) {
+            return;
+          }
+          entry.sheetName = sheetName;
+          previewLocationTitle.textContent = sheetName;
+          renderRecentPreviewMenu();
+        } catch (_error) {
+          // Cross-origin or browser PDF viewers are not readable from the parent frame.
+        }
+      }
+
+      function referenceForEvidenceLink(link) {
+        const evidenceId = link.dataset.evidenceId;
+        const turnState = link.closest(".assistant-turn")?.__aegisTurn;
+        const reference = evidenceId ? turnState?.evidenceRegistry?.__flat?.[evidenceId] : null;
+        return {
+          ...(reference || {}),
+          href: reference?.href || link.getAttribute("href") || "",
+          source_id: reference?.source_id || link.dataset.sourceKey || "",
+          display_label: reference?.display_label || link.textContent.trim(),
+        };
+      }
+
+      function evidenceDisplayLabel(reference, evidenceId) {
+        return reference?.display_label || evidenceId;
+      }
+
+      function flattenEvidenceRegistry(registry) {
+        const flat = {};
+        Object.values(registry || {}).forEach((sourceGroup) => {
+          Object.entries(sourceGroup || {}).forEach(([evidenceId, reference]) => {
+            flat[evidenceId] = reference;
+          });
+        });
+        return flat;
+      }
+
+      function renderEvidenceMarkers(value, evidenceRegistry = {}) {
+        const flatRegistry = evidenceRegistry.__flat || flattenEvidenceRegistry(evidenceRegistry);
+        return String(value || "").replace(/\[\[(E\d+)\]\]/g, (_match, evidenceId) => {
+          const reference = flatRegistry[evidenceId];
+          if (!reference) {
+            return "";
+          }
+          const label = escapeHtml(evidenceDisplayLabel(reference, evidenceId));
+          const href = reference.href ? escapeHtml(reference.href) : "#";
+          const sourceKey = escapeHtml(reference.source_id || "");
+          return ` <a class="citation-chip evidence-link" href="${href}" target="_blank" rel="noopener noreferrer" data-evidence-id="${escapeHtml(evidenceId)}" data-source-key="${sourceKey}">${label}</a>`;
+        });
+      }
+
+      function stripEvidenceMarkers(value) {
+        return String(value || "").replace(/\[\[E\d+\]\]/g, "").replace(/\s+/g, " ").trim();
+      }
+
+      const demoS3BaseUrl = "https://example-bucket.s3.amazonaws.com/reports/";
+
+      function buildLegacySourceHref(fileType, s3Key, locationLabel) {
+        if (!s3Key) {
+          return "#";
+        }
+        const safeKey = String(s3Key)
+          .split("/")
+          .map((part) => encodeURIComponent(part))
+          .join("/");
+        let href = `${demoS3BaseUrl.replace(/\/$/, "")}/${safeKey}`;
+        const pageMatch = String(locationLabel || "").match(/\d+/);
+        if (String(fileType || "").toLowerCase() === "pdf" && pageMatch) {
+          href += `#page=${pageMatch[0]}`;
+        }
+        return href;
+      }
+
+      function renderLegacySourceLinks(value, sourceKey, sourceLabel) {
+        return String(value || "").replace(
+          /Source:\s*\{\{S3_LINK:open:([^:}]+):([^:}]+):([^}]*)\}\}(?:\s*\|\s*Page:\s*([^\n<]+))?/g,
+          (_match, fileType, s3Key, _linkText, locationLabel) => {
+            const pageMatch = String(locationLabel || "").match(/\d+/);
+            const label =
+              String(fileType || "").toLowerCase() === "pdf" && pageMatch
+                ? `${sourceLabel} p.${pageMatch[0]}`
+                : `${sourceLabel}${locationLabel ? ` ${String(locationLabel).trim()}` : ""}`;
+            const href = buildLegacySourceHref(fileType, s3Key, locationLabel);
+            return `<a class="citation-chip evidence-link" href="${escapeHtml(
+              href,
+            )}" target="_blank" rel="noopener noreferrer" data-source-key="${escapeHtml(
+              sourceKey,
+            )}">${escapeHtml(label)}</a>`;
+          },
+        );
+      }
+
+      function renderEvidencePanelContent(sourceKey, sourceLabel, content) {
+        const safeContent = escapeHtml(content || "");
+        return renderMarkdown(renderLegacySourceLinks(safeContent, sourceKey, sourceLabel));
+      }
+
+      function splitMarkdownTableRow(line) {
+        const trimmed = String(line || "").trim();
+        const bounded = trimmed.startsWith("|") && trimmed.endsWith("|")
+          ? trimmed.slice(1, -1)
+          : trimmed;
+        return bounded.split("|").map((cell) => cell.trim());
+      }
+
+      function isMarkdownTableDivider(line) {
+        const cells = splitMarkdownTableRow(line);
+        return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+      }
+
+      function isMarkdownTableStart(lines, index) {
+        const line = String(lines[index] || "").trim();
+        const next = String(lines[index + 1] || "").trim();
+        return line.includes("|") && isMarkdownTableDivider(next);
+      }
+
+      function renderInlineMarkdown(value, evidenceRegistry = {}) {
+        let html = String(value || "");
+        html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+        return renderEvidenceMarkers(html, evidenceRegistry);
+      }
+
+      function renderTableCellMarkdown(value) {
+        let html = stripEvidenceMarkers(value);
+        html = html.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+        return html;
+      }
+
+      function measureTableCellText(value) {
+        return stripEvidenceMarkers(value)
+          .replace(/\*\*/g, "")
+          .replace(/&[#a-zA-Z0-9]+;/g, "x")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function estimateTableColumnWidths(headers, rows) {
+        const minWidth = 96;
+        const maxWidth = 260;
+        const numericMaxWidth = 150;
+        const widthForText = (value, isHeader = false) => {
+          const text = measureTableCellText(value);
+          const length = text.length;
+          const numeric = /^[\s$%()+,\-.\d]+$/.test(text) && /\d/.test(text);
+          const base = isHeader ? 86 : 74;
+          const perChar = isHeader ? 6.4 : 5.7;
+          const cap = numeric ? numericMaxWidth : maxWidth;
+          return Math.max(minWidth, Math.min(cap, Math.ceil(base + length * perChar)));
+        };
+
+        return headers.map((header, columnIndex) => {
+          const headerWidth = widthForText(header, true);
+          const rowWidth = rows.reduce((widest, row) => {
+            return Math.max(widest, widthForText(row[columnIndex] || ""));
+          }, minWidth);
+          return Math.max(headerWidth, rowWidth);
+        });
+      }
+
+      function renderMarkdownTable(lines, startIndex, evidenceRegistry = {}) {
+        const headers = splitMarkdownTableRow(lines[startIndex]);
+        const rows = [];
+        let index = startIndex + 2;
+        while (index < lines.length && String(lines[index] || "").trim().includes("|")) {
+          const rawLine = String(lines[index] || "").trim();
+          if (!rawLine || isMarkdownTableDivider(rawLine)) {
+            break;
+          }
+          rows.push(splitMarkdownTableRow(rawLine));
+          index += 1;
+        }
+
+        const columnWidths = estimateTableColumnWidths(headers, rows);
+        const tableMinWidth = Math.max(
+          420,
+          columnWidths.reduce((total, width) => total + width, 0),
+        );
+        const colgroupHtml = `<colgroup>${columnWidths
+          .map((width) => `<col style="width: ${width}px" />`)
+          .join("")}</colgroup>`;
+        const headerHtml = headers
+          .map((cell) => `<th>${renderTableCellMarkdown(cell)}</th>`)
+          .join("");
+        const rowHtml = rows
+          .map((row) => {
+            const cells = headers.map((_, cellIndex) =>
+              `<td>${renderTableCellMarkdown(row[cellIndex] || "")}</td>`,
+            );
+            return `<tr>${cells.join("")}</tr>`;
+          })
+          .join("");
+        const tableHtml = [
+          `<div class="research-table-wrap"><table class="research-table" style="--table-min-width: ${tableMinWidth}px">`,
+          colgroupHtml,
+          `<thead><tr>${headerHtml}</tr></thead><tbody>${rowHtml}</tbody></table></div>`,
+        ].join("");
+        return {
+          html: tableHtml,
+          nextIndex: index,
+        };
+      }
+
+      function chartFacts(artifact) {
+        const facts = Array.isArray(artifact?.spec?.facts) ? artifact.spec.facts : [];
+        return facts
+          .map((fact) => ({
+            bank_label: String(fact.bank_label || "").trim() || "Bank",
+            period_label: String(fact.period_label || "").trim() || "Period",
+            fiscal_year: Number(fact.fiscal_year || 0),
+            quarter: String(fact.quarter || "").trim(),
+            metric_name: String(fact.metric_name || artifact?.spec?.metric_name || "").trim(),
+            value: Number(fact.value),
+            unit: String(fact.unit || artifact?.spec?.unit || "").trim(),
+            evidence_ids: Array.isArray(fact.evidence_ids) ? fact.evidence_ids : [],
+          }))
+          .filter((fact) => Number.isFinite(fact.value));
+      }
+
+      function chartPoints(artifact) {
+        const points = Array.isArray(artifact?.spec?.points) ? artifact.spec.points : [];
+        return points
+          .map((point) => ({
+            ...point,
+            label: String(point.label || point.category || point.group || "").trim(),
+            group: String(point.group || "").trim(),
+            category: String(point.category || point.label || "").trim(),
+            bank_label: String(point.bank_label || "").trim(),
+            period_label: String(point.period_label || "").trim(),
+            value: Number(point.value),
+            x: Number(point.x),
+            y: Number(point.y),
+            is_total: Boolean(point.is_total),
+            evidence_ids: Array.isArray(point.evidence_ids) ? point.evidence_ids : [],
+          }))
+          .filter(
+            (point) =>
+              Number.isFinite(point.value) || (Number.isFinite(point.x) && Number.isFinite(point.y)),
+          );
+      }
+
+      function chartSeries(artifact, facts = chartFacts(artifact)) {
+        const rawSeries = Array.isArray(artifact?.spec?.series) ? artifact.spec.series : [];
+        if (rawSeries.length) {
+          return rawSeries
+            .map((series) => ({
+              name: String(series.name || "Series").trim(),
+              unit: String(series.unit || artifact?.spec?.unit || "").trim(),
+              points: (Array.isArray(series.points) ? series.points : [])
+                .map((point) => ({
+                  label: String(
+                    point.label || point.period_label || point.bank_label || point.group || point.category || "",
+                  ).trim(),
+                  bank_label: String(point.bank_label || "").trim(),
+                  value: Number(point.value),
+                  evidence_ids: Array.isArray(point.evidence_ids) ? point.evidence_ids : [],
+                }))
+                .filter((point) => point.label && Number.isFinite(point.value)),
+            }))
+            .filter((series) => series.points.length);
+        }
+
+        const byBank = new Map();
+        facts.forEach((fact) => {
+          const key = fact.bank_label || "Series";
+          if (!byBank.has(key)) {
+            byBank.set(key, { name: key, unit: fact.unit || artifact?.spec?.unit || "", points: [] });
+          }
+          byBank.get(key).points.push({
+            label: fact.period_label,
+            bank_label: fact.bank_label,
+            value: fact.value,
+            evidence_ids: fact.evidence_ids,
+          });
+        });
+        return Array.from(byBank.values()).map((series) => ({
+          ...series,
+          points: series.points.sort((a, b) => _periodRankFromLabel(a.label) - _periodRankFromLabel(b.label)),
+        }));
+      }
+
+      function chartPointFacts(artifact) {
+        return chartPoints(artifact)
+          .filter((point) => Number.isFinite(point.value))
+          .map((point) => {
+            const chartType = artifact?.spec?.chart_type || "";
+            const periodLabel =
+              point.period_label || point.label || point.group || point.category || point.bank_label || "Period";
+            const periodParts = periodPartsFromLabel(periodLabel);
+            const bankLabel =
+              point.bank_label ||
+              point.group ||
+              (chartType === "heatmap" ? point.category : "") ||
+              (chartType === "trend_bar" || chartType === "trend_line" ? artifact?.spec?.metric_name : point.label) ||
+              artifact?.spec?.metric_name ||
+              "Series";
+            return {
+              bank_label: bankLabel,
+              period_label: periodLabel,
+              fiscal_year: periodParts.fiscal_year,
+              quarter: periodParts.quarter,
+              metric_name: String(artifact?.spec?.metric_name || "").trim(),
+              value: point.value,
+              unit: String(artifact?.spec?.unit || "").trim(),
+              evidence_ids: point.evidence_ids,
+            };
+          });
+      }
+
+      function _periodRankFromLabel(label) {
+        const match = String(label || "").match(/Q([1-4])\s*(?:FY)?(20\d{2})/i);
+        if (match) {
+          return Number(match[2]) * 10 + Number(match[1]);
+        }
+        const year = String(label || "").match(/\b(20\d{2})\b/);
+        return year ? Number(year[1]) * 10 : 0;
+      }
+
+      function periodPartsFromLabel(label) {
+        const match = String(label || "").match(/Q([1-4])\s*(?:FY)?(20\d{2})/i);
+        return {
+          fiscal_year: match ? Number(match[2]) : 0,
+          quarter: match ? `Q${match[1]}` : "",
+        };
+      }
+
+      function chartPeriodRank(fact) {
+        const quarterRank = { Q1: 1, Q2: 2, Q3: 3, Q4: 4 };
+        return (Number(fact.fiscal_year) || 0) * 10 + (quarterRank[fact.quarter] || 0);
+      }
+
+      function chartRowPeriodRank(row) {
+        return chartPeriodRank(row) || _periodRankFromLabel(row.period_label || row.label);
+      }
+
+      function chartColor(index) {
+        return ["#005daa", "#00a6d6", "#fdb515", "#6b7fd7", "#2f9f7a", "#d65f59"][index % 6];
+      }
+
+      function truncateChartLabel(value, maxLength = 14) {
+        const text = String(value || "");
+        return text.length > maxLength ? `${text.slice(0, Math.max(1, maxLength - 3))}...` : text;
+      }
+
+      function formatChartValue(value, unit = "", compact = false) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) {
+          return "-";
+        }
+        const magnitude = Math.abs(number);
+        const decimals = magnitude >= 100 || Number.isInteger(number) ? 0 : 1;
+        const formatter = new Intl.NumberFormat(undefined, {
+          maximumFractionDigits: decimals,
+          minimumFractionDigits: decimals && !compact ? 1 : 0,
+          notation: compact && magnitude >= 1000000 ? "compact" : "standard",
+        });
+        const formatted = formatter.format(number);
+        if (!unit) {
+          return formatted;
+        }
+        if (unit === "%" || unit === "bps" || unit === "x") {
+          return `${formatted}${unit}`;
+        }
+        if (unit === "$") {
+          return `$${formatted}`;
+        }
+        return `${formatted} ${unit}`;
+      }
+
+      function chartExtent(values, includeZero = true) {
+        const numeric = values.filter((value) => Number.isFinite(value));
+        if (!numeric.length) {
+          return [0, 1];
+        }
+        let min = Math.min(...numeric);
+        let max = Math.max(...numeric);
+        if (includeZero) {
+          min = Math.min(0, min);
+          max = Math.max(0, max);
+        }
+        if (min === max) {
+          const pad = Math.max(1, Math.abs(max) * 0.08);
+          min -= pad;
+          max += pad;
+        } else {
+          const pad = (max - min) * 0.08;
+          min -= includeZero ? 0 : pad;
+          max += pad;
+        }
+        return [min, max];
+      }
+
+      function renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, unit) {
+        return [0, 0.25, 0.5, 0.75, 1]
+          .map((ratio) => {
+            const y = margin.top + plotHeight * ratio;
+            const value = yMax - (yMax - yMin) * ratio;
+            return `<g>
+              <line class="chart-grid" x1="${margin.left}" x2="${
+                margin.left + plotWidth
+              }" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" />
+              <text class="chart-tick" x="${margin.left - 8}" y="${(y + 3).toFixed(
+                1,
+              )}" text-anchor="end">${escapeHtml(formatChartValue(value, unit, true))}</text>
+            </g>`;
+          })
+          .join("");
+      }
+
+      function chartTooltip(fact, unit) {
+        return `${fact.bank_label} | ${fact.period_label}: ${formatChartValue(fact.value, unit)}`;
+      }
+
+      function renderPeerBarChart(artifact, facts) {
+        const isTrendBar = artifact?.spec?.chart_type === "trend_bar";
+        const sorted = isTrendBar
+          ? [...facts].sort((a, b) => chartRowPeriodRank(a) - chartRowPeriodRank(b))
+          : [...facts].sort((a, b) => b.value - a.value);
+        if (!sorted.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || sorted[0]?.unit || "";
+        const width = 680;
+        const height = 220;
+        const margin = { top: 16, right: 16, bottom: 42, left: 58 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [yMin, yMax] = chartExtent(sorted.map((fact) => fact.value), true);
+        const slot = plotWidth / Math.max(1, sorted.length);
+        const gap = Math.min(18, slot * 0.28);
+        const barWidth = Math.max(16, slot - gap);
+        const zeroY = margin.top + plotHeight - ((0 - yMin) / (yMax - yMin)) * plotHeight;
+        const bars = sorted
+          .map((fact, index) => {
+            const x = margin.left + slot * index + (slot - barWidth) / 2;
+            const valueY =
+              margin.top + plotHeight - ((fact.value - yMin) / (yMax - yMin)) * plotHeight;
+            const y = Math.min(valueY, zeroY);
+            const barHeight = Math.max(2, Math.abs(zeroY - valueY));
+            const labelY = Math.max(margin.top + 12, y - 7);
+            return `<g>
+              <rect class="chart-bar ${index === 0 ? "featured" : ""}" x="${x.toFixed(
+                1,
+              )}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${barHeight.toFixed(
+                1,
+              )}" rx="5">
+                <title>${escapeHtml(chartTooltip(fact, unit))}</title>
+              </rect>
+              <text class="chart-value-label" x="${(x + barWidth / 2).toFixed(
+                1,
+              )}" y="${labelY.toFixed(1)}" text-anchor="middle">${escapeHtml(
+                formatChartValue(fact.value, unit, true),
+              )}</text>
+              <text class="chart-tick" x="${(x + barWidth / 2).toFixed(
+                1,
+              )}" y="${height - 17}" text-anchor="middle">${escapeHtml(
+                truncateChartLabel(isTrendBar ? fact.period_label : fact.bank_label, 12),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, unit)}
+          <line class="chart-grid" x1="${margin.left}" x2="${margin.left + plotWidth}" y1="${zeroY.toFixed(
+            1,
+          )}" y2="${zeroY.toFixed(1)}" />
+          ${bars}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 4}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Bank",
+          )}</text>
+          <text class="chart-axis-label" x="16" y="${height / 2}" text-anchor="middle" transform="rotate(-90 16 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || unit || "Value")}</text>
+        </svg>`;
+      }
+
+      function renderPeerRankBarChart(artifact, facts) {
+        const pointFacts = chartPoints(artifact).map((point) => ({
+          bank_label: point.label,
+          period_label: point.group || point.label,
+          value: point.value,
+          unit: artifact?.spec?.unit || "",
+        }));
+        const rows = (facts.length ? facts : pointFacts).sort((a, b) => b.value - a.value);
+        if (!rows.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || rows[0]?.unit || "";
+        const width = 680;
+        const height = Math.max(205, 86 + rows.length * 28);
+        const margin = { top: 18, right: 76, bottom: 44, left: 118 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [xMin, xMax] = chartExtent(rows.map((row) => row.value), true);
+        const xFor = (value) => margin.left + ((value - xMin) / (xMax - xMin)) * plotWidth;
+        const rowHeight = plotHeight / rows.length;
+        const average = rows.reduce((total, row) => total + row.value, 0) / rows.length;
+        const bars = rows
+          .map((row, index) => {
+            const y = margin.top + index * rowHeight + rowHeight * 0.2;
+            const zeroX = xFor(0);
+            const valueX = xFor(row.value);
+            const x = Math.min(zeroX, valueX);
+            const barWidth = Math.max(2, Math.abs(valueX - zeroX));
+            return `<g>
+              <text class="chart-tick" x="${margin.left - 10}" y="${(y + rowHeight * 0.44).toFixed(
+                1,
+              )}" text-anchor="end">${escapeHtml(truncateChartLabel(row.bank_label, 16))}</text>
+              <rect class="chart-bar ${index === 0 ? "featured" : ""}" x="${x.toFixed(
+                1,
+              )}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${(rowHeight * 0.56).toFixed(
+                1,
+              )}" rx="5"><title>${escapeHtml(chartTooltip(row, unit))}</title></rect>
+              <text class="chart-value-label" x="${(Math.max(zeroX, valueX) + 7).toFixed(
+                1,
+              )}" y="${(y + rowHeight * 0.42).toFixed(1)}">${escapeHtml(
+                formatChartValue(row.value, unit, true),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        const avgX = xFor(average);
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          <line class="chart-grid" x1="${margin.left}" x2="${margin.left + plotWidth}" y1="${margin.top}" y2="${
+            margin.top + plotHeight
+          }" />
+          <line class="chart-average" x1="${avgX.toFixed(1)}" x2="${avgX.toFixed(1)}" y1="${margin.top}" y2="${
+            margin.top + plotHeight
+          }" />
+          <text class="chart-tick" x="${avgX.toFixed(1)}" y="${margin.top - 5}" text-anchor="middle">avg</text>
+          ${bars}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 5}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || unit || "Reported value",
+          )}</text>
+          <text class="chart-axis-label" x="17" y="${height / 2}" text-anchor="middle" transform="rotate(-90 17 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || "Bank")}</text>
+        </svg>`;
+      }
+
+      function renderTrendLineChart(artifact, facts) {
+        const sorted = [...facts].sort((a, b) => chartRowPeriodRank(a) - chartRowPeriodRank(b));
+        if (!sorted.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || sorted[0]?.unit || "";
+        const width = 680;
+        const height = 220;
+        const margin = { top: 16, right: 20, bottom: 42, left: 58 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [yMin, yMax] = chartExtent(sorted.map((fact) => fact.value), false);
+        const xFor = (index) =>
+          margin.left + (sorted.length === 1 ? plotWidth / 2 : (plotWidth * index) / (sorted.length - 1));
+        const yFor = (value) => margin.top + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+        const points = sorted.map((fact, index) => [xFor(index), yFor(fact.value)]);
+        const linePath = points
+          .map(([x, y], index) => `${index === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`)
+          .join(" ");
+        const areaPath = `${linePath} L ${points[points.length - 1][0].toFixed(1)} ${
+          margin.top + plotHeight
+        } L ${points[0][0].toFixed(1)} ${margin.top + plotHeight} Z`;
+        const pointHtml = sorted
+          .map((fact, index) => {
+            const [x, y] = points[index];
+            return `<g>
+              <circle class="chart-point" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5" tabindex="0">
+                <title>${escapeHtml(chartTooltip(fact, unit))}</title>
+              </circle>
+              <text class="chart-value-label" x="${x.toFixed(1)}" y="${Math.max(
+                margin.top + 10,
+                y - 10,
+              ).toFixed(1)}" text-anchor="middle">${escapeHtml(
+                formatChartValue(fact.value, unit, true),
+              )}</text>
+              <text class="chart-tick" x="${x.toFixed(1)}" y="${height - 18}" text-anchor="middle">${escapeHtml(
+                truncateChartLabel(fact.period_label, 10),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, unit)}
+          <path class="chart-area" d="${areaPath}" />
+          <path class="chart-line" d="${linePath}" />
+          ${pointHtml}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 4}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Period",
+          )}</text>
+          <text class="chart-axis-label" x="16" y="${height / 2}" text-anchor="middle" transform="rotate(-90 16 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || unit || "Value")}</text>
+        </svg>`;
+      }
+
+      function renderMultiSeriesLineChart(artifact, facts) {
+        const series = chartSeries(artifact, facts).slice(0, 6);
+        const allPoints = series.flatMap((item) => item.points);
+        if (series.length < 1 || allPoints.length < 2) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || series[0]?.unit || "";
+        const labels = Array.from(new Set(allPoints.map((point) => point.label))).sort(
+          (a, b) => _periodRankFromLabel(a) - _periodRankFromLabel(b),
+        );
+        const width = 680;
+        const height = 230;
+        const margin = { top: 18, right: 116, bottom: 42, left: 58 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [yMin, yMax] = chartExtent(allPoints.map((point) => point.value), false);
+        const xFor = (label) =>
+          margin.left + (labels.length === 1 ? plotWidth / 2 : (plotWidth * labels.indexOf(label)) / (labels.length - 1));
+        const yFor = (value) => margin.top + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+        const paths = series
+          .map((item, index) => {
+            const path = item.points
+              .sort((a, b) => labels.indexOf(a.label) - labels.indexOf(b.label))
+              .map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${xFor(point.label).toFixed(1)} ${yFor(point.value).toFixed(1)}`)
+              .join(" ");
+            const last = item.points[item.points.length - 1];
+            return `<g>
+              <path class="chart-line secondary" d="${path}" stroke="${chartColor(index)}" />
+              <text class="chart-tick" x="${width - margin.right + 8}" y="${yFor(last.value).toFixed(
+                1,
+              )}">${escapeHtml(truncateChartLabel(item.name, 16))}</text>
+            </g>`;
+          })
+          .join("");
+        const xLabels = labels
+          .map((label) => `<text class="chart-tick" x="${xFor(label).toFixed(1)}" y="${height - 18}" text-anchor="middle">${escapeHtml(truncateChartLabel(label, 10))}</text>`)
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, unit)}
+          ${paths}
+          ${xLabels}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 4}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Period",
+          )}</text>
+          <text class="chart-axis-label" x="16" y="${height / 2}" text-anchor="middle" transform="rotate(-90 16 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || unit || "Value")}</text>
+        </svg>`;
+      }
+
+      function renderSlopegraphChart(artifact, facts) {
+        const series = chartSeries(artifact, facts).filter((item) => item.points.length >= 2).slice(0, 8);
+        const endpoints = series.map((item) => ({
+          name: item.name,
+          start: item.points[0],
+          end: item.points[item.points.length - 1],
+          unit: item.unit || artifact?.spec?.unit || "",
+        }));
+        if (endpoints.length < 2) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || endpoints[0].unit || "";
+        const values = endpoints.flatMap((item) => [item.start.value, item.end.value]);
+        const [yMin, yMax] = chartExtent(values, false);
+        const width = 680;
+        const height = Math.max(210, 78 + endpoints.length * 24);
+        const margin = { top: 22, right: 126, bottom: 28, left: 126 };
+        const plotHeight = height - margin.top - margin.bottom;
+        const yFor = (value) => margin.top + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+        const leftX = margin.left;
+        const rightX = width - margin.right;
+        const rows = endpoints
+          .map((item, index) => {
+            const y1 = yFor(item.start.value);
+            const y2 = yFor(item.end.value);
+            return `<g>
+              <path class="chart-connector" d="M ${leftX} ${y1.toFixed(1)} L ${rightX} ${y2.toFixed(1)}" stroke="${chartColor(index)}" />
+              <circle class="chart-point" cx="${leftX}" cy="${y1.toFixed(1)}" r="4" />
+              <circle class="chart-point" cx="${rightX}" cy="${y2.toFixed(1)}" r="4" />
+              <text class="chart-tick" x="${leftX - 8}" y="${(y1 + 3).toFixed(1)}" text-anchor="end">${escapeHtml(
+                `${truncateChartLabel(item.name, 12)} ${formatChartValue(item.start.value, unit, true)}`,
+              )}</text>
+              <text class="chart-tick" x="${rightX + 8}" y="${(y2 + 3).toFixed(1)}">${escapeHtml(
+                `${formatChartValue(item.end.value, unit, true)} ${truncateChartLabel(item.name, 12)}`,
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          <text class="chart-axis-label" x="${leftX}" y="14" text-anchor="middle">${escapeHtml(endpoints[0].start.label)}</text>
+          <text class="chart-axis-label" x="${rightX}" y="14" text-anchor="middle">${escapeHtml(endpoints[0].end.label)}</text>
+          ${rows}
+        </svg>`;
+      }
+
+      function renderDeltaBarChart(artifact, facts) {
+        let points = chartPoints(artifact);
+        if (!points.length && facts.length) {
+          const byBank = new Map();
+          facts.forEach((fact) => {
+            if (!byBank.has(fact.bank_label)) byBank.set(fact.bank_label, []);
+            byBank.get(fact.bank_label).push(fact);
+          });
+          points = Array.from(byBank.entries())
+            .map(([label, rows]) => {
+              const ordered = rows.sort((a, b) => chartPeriodRank(a) - chartPeriodRank(b));
+              return { label, value: ordered[ordered.length - 1].value - ordered[0].value };
+            })
+            .filter((point) => Number.isFinite(point.value));
+        }
+        if (!points.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || "";
+        const width = 680;
+        const height = Math.max(180, 70 + points.length * 28);
+        const margin = { top: 18, right: 72, bottom: 24, left: 118 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [xMin, xMax] = chartExtent(points.map((point) => point.value), true);
+        const xFor = (value) => margin.left + ((value - xMin) / (xMax - xMin)) * plotWidth;
+        const zeroX = xFor(0);
+        const rowHeight = plotHeight / points.length;
+        const bars = points
+          .sort((a, b) => b.value - a.value)
+          .map((point, index) => {
+            const y = margin.top + index * rowHeight + rowHeight * 0.22;
+            const valueX = xFor(point.value);
+            const x = Math.min(zeroX, valueX);
+            const barWidth = Math.max(2, Math.abs(valueX - zeroX));
+            return `<g>
+              <text class="chart-tick" x="${margin.left - 10}" y="${(y + rowHeight * 0.42).toFixed(
+                1,
+              )}" text-anchor="end">${escapeHtml(truncateChartLabel(point.label, 16))}</text>
+              <rect class="chart-bar ${point.value >= 0 ? "featured" : ""}" x="${x.toFixed(
+                1,
+              )}" y="${y.toFixed(1)}" width="${barWidth.toFixed(1)}" height="${(rowHeight * 0.54).toFixed(
+                1,
+              )}" rx="5" />
+              <text class="chart-value-label" x="${(point.value >= 0 ? valueX + 7 : valueX - 7).toFixed(
+                1,
+              )}" y="${(y + rowHeight * 0.42).toFixed(1)}" text-anchor="${
+                point.value >= 0 ? "start" : "end"
+              }">${escapeHtml(formatChartValue(point.value, unit, true))}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          <line class="chart-zero-line" x1="${zeroX.toFixed(1)}" x2="${zeroX.toFixed(1)}" y1="${margin.top}" y2="${
+            margin.top + plotHeight
+          }" />
+          ${bars}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 4}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || `Change${unit ? ` (${unit})` : ""}`,
+          )}</text>
+        </svg>`;
+      }
+
+      function interpolateColor(start, end, ratio) {
+        return start.map((value, index) => Math.round(value + (end[index] - value) * ratio));
+      }
+
+      function heatColor(ratio) {
+        const clamped = Math.max(0, Math.min(1, ratio));
+        const low = [231, 247, 255];
+        const mid = [0, 166, 214];
+        const high = [6, 43, 96];
+        const rgb =
+          clamped < 0.62
+            ? interpolateColor(low, mid, clamped / 0.62)
+            : interpolateColor(mid, high, (clamped - 0.62) / 0.38);
+        return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+      }
+
+      function uniqueBy(values, keyFn) {
+        const seen = new Set();
+        return values.filter((value) => {
+          const key = keyFn(value);
+          if (seen.has(key)) {
+            return false;
+          }
+          seen.add(key);
+          return true;
+        });
+      }
+
+      function renderHeatmapChart(artifact, facts) {
+        if (!facts.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || facts[0]?.unit || "";
+        const banks = uniqueBy(
+          [...facts].sort((a, b) => a.bank_label.localeCompare(b.bank_label)),
+          (fact) => fact.bank_label,
+        ).map((fact) => fact.bank_label);
+        const periods = uniqueBy(
+          [...facts].sort((a, b) => chartPeriodRank(a) - chartPeriodRank(b)),
+          (fact) => fact.period_label,
+        ).map((fact) => fact.period_label);
+        const width = 680;
+        const height = Math.max(220, 96 + banks.length * 30);
+        const margin = { top: 18, right: 16, bottom: 40, left: 98 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const cellWidth = plotWidth / Math.max(1, periods.length);
+        const cellHeight = plotHeight / Math.max(1, banks.length);
+        const [minValue, maxValue] = chartExtent(facts.map((fact) => fact.value), false);
+        const factByKey = new Map(
+          facts.map((fact) => [`${fact.bank_label}__${fact.period_label}`, fact]),
+        );
+        const cells = banks
+          .map((bank, bankIndex) =>
+            periods
+              .map((period, periodIndex) => {
+                const fact = factByKey.get(`${bank}__${period}`);
+                const x = margin.left + periodIndex * cellWidth;
+                const y = margin.top + bankIndex * cellHeight;
+                if (!fact) {
+                  return `<rect class="chart-heat-cell" x="${x.toFixed(1)}" y="${y.toFixed(
+                    1,
+                  )}" width="${cellWidth.toFixed(1)}" height="${cellHeight.toFixed(
+                    1,
+                  )}" fill="rgba(226, 232, 240, 0.72)" rx="4" />`;
+                }
+                const ratio = (fact.value - minValue) / (maxValue - minValue);
+                const labelFill = ratio > 0.66 ? "#ffffff" : "#062b60";
+                return `<g>
+                  <rect class="chart-heat-cell" x="${x.toFixed(1)}" y="${y.toFixed(
+                    1,
+                  )}" width="${cellWidth.toFixed(1)}" height="${cellHeight.toFixed(
+                    1,
+                  )}" fill="${heatColor(ratio)}" rx="4" tabindex="0">
+                    <title>${escapeHtml(chartTooltip(fact, unit))}</title>
+                  </rect>
+                  <text class="chart-value-label" style="fill: ${labelFill}" x="${(x + cellWidth / 2).toFixed(
+                    1,
+                  )}" y="${(y + cellHeight / 2 + 4).toFixed(1)}" text-anchor="middle" fill="${labelFill}">${escapeHtml(
+                    formatChartValue(fact.value, unit, true),
+                  )}</text>
+                </g>`;
+              })
+              .join(""),
+          )
+          .join("");
+        const rowLabels = banks
+          .map((bank, index) => {
+            const y = margin.top + index * cellHeight + cellHeight / 2 + 4;
+            return `<text class="chart-tick" x="${margin.left - 10}" y="${y.toFixed(
+              1,
+            )}" text-anchor="end">${escapeHtml(truncateChartLabel(bank, 16))}</text>`;
+          })
+          .join("");
+        const columnLabels = periods
+          .map((period, index) => {
+            const x = margin.left + index * cellWidth + cellWidth / 2;
+            return `<text class="chart-tick" x="${x.toFixed(1)}" y="${height - 18}" text-anchor="middle">${escapeHtml(
+              truncateChartLabel(period, 10),
+            )}</text>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${cells}
+          ${rowLabels}
+          ${columnLabels}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 4}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Period",
+          )}</text>
+          <text class="chart-axis-label" x="16" y="${height / 2}" text-anchor="middle" transform="rotate(-90 16 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || "Bank")}</text>
+        </svg>`;
+      }
+
+      function renderCompositionChart(artifact) {
+        const points = chartPoints(artifact).filter((point) => point.group && point.category);
+        if (!points.length) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const groups = Array.from(new Set(points.map((point) => point.group)));
+        const categories = Array.from(new Set(points.map((point) => point.category)));
+        const normalize = artifact?.spec?.chart_type === "composition_100_bar";
+        const unit = normalize ? "%" : artifact?.spec?.unit || "";
+        const width = 680;
+        const height = Math.max(210, 96 + groups.length * 44);
+        const margin = { top: 18, right: 132, bottom: 34, left: 96 };
+        const plotWidth = width - margin.left - margin.right;
+        const rowHeight = (height - margin.top - margin.bottom) / groups.length;
+        const maxTotal = Math.max(
+          1,
+          ...groups.map((group) =>
+            points.filter((point) => point.group === group).reduce((total, point) => total + point.value, 0),
+          ),
+        );
+        const bars = groups
+          .map((group, groupIndex) => {
+            const groupPoints = points.filter((point) => point.group === group);
+            const total = groupPoints.reduce((sum, point) => sum + point.value, 0) || 1;
+            let cursor = margin.left;
+            const segments = groupPoints
+              .map((point) => {
+                const renderedValue = normalize ? (point.value / total) * 100 : point.value;
+                const widthValue = normalize ? renderedValue / 100 : point.value / maxTotal;
+                const segmentWidth = Math.max(1, widthValue * plotWidth);
+                const x = cursor;
+                cursor += segmentWidth;
+                const colorIndex = categories.indexOf(point.category);
+                return `<rect class="chart-segment" x="${x.toFixed(1)}" y="${(
+                  margin.top + groupIndex * rowHeight + rowHeight * 0.24
+                ).toFixed(1)}" width="${segmentWidth.toFixed(1)}" height="${(rowHeight * 0.52).toFixed(
+                  1,
+                )}" rx="4" fill="${chartColor(colorIndex)}"><title>${escapeHtml(
+                  `${group} | ${point.category}: ${formatChartValue(renderedValue, unit, true)}`,
+                )}</title></rect>`;
+              })
+              .join("");
+            return `<g>
+              <text class="chart-tick" x="${margin.left - 10}" y="${(
+                margin.top + groupIndex * rowHeight + rowHeight * 0.55
+              ).toFixed(1)}" text-anchor="end">${escapeHtml(truncateChartLabel(group, 15))}</text>
+              ${segments}
+            </g>`;
+          })
+          .join("");
+        const legend = categories
+          .slice(0, 6)
+          .map((category, index) => {
+            const y = margin.top + index * 18 + 4;
+            return `<g>
+              <rect x="${width - margin.right + 12}" y="${y}" width="9" height="9" rx="2" fill="${chartColor(
+                index,
+              )}" />
+              <text class="chart-tick" x="${width - margin.right + 27}" y="${y + 8}">${escapeHtml(
+                truncateChartLabel(category, 16),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${bars}
+          ${legend}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 5}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Group",
+          )}</text>
+          <text class="chart-axis-label" x="17" y="${height / 2}" text-anchor="middle" transform="rotate(-90 17 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || unit || "Value")}</text>
+        </svg>`;
+      }
+
+      function renderWaterfallChart(artifact) {
+        const points = chartPoints(artifact);
+        if (points.length < 3) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const unit = artifact?.spec?.unit || "";
+        let running = 0;
+        const barsData = points.map((point, index) => {
+          const start = point.is_total ? 0 : running;
+          const end = point.is_total ? point.value : running + point.value;
+          running = end;
+          return { ...point, start, end, is_total: point.is_total || index === 0 || index === points.length - 1 };
+        });
+        const values = barsData.flatMap((point) => [point.start, point.end]);
+        const [yMin, yMax] = chartExtent(values, true);
+        const width = 680;
+        const height = 230;
+        const margin = { top: 18, right: 20, bottom: 54, left: 60 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const slot = plotWidth / barsData.length;
+        const barWidth = Math.max(18, slot * 0.62);
+        const yFor = (value) => margin.top + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+        const bars = barsData
+          .map((point, index) => {
+            const x = margin.left + slot * index + (slot - barWidth) / 2;
+            const yStart = yFor(point.start);
+            const yEnd = yFor(point.end);
+            const y = Math.min(yStart, yEnd);
+            const heightValue = Math.max(2, Math.abs(yEnd - yStart));
+            const className = point.is_total
+              ? "chart-waterfall-total"
+              : point.value >= 0
+                ? "chart-waterfall-positive"
+                : "chart-waterfall-negative";
+            return `<g>
+              <rect class="${className}" x="${x.toFixed(1)}" y="${y.toFixed(
+                1,
+              )}" width="${barWidth.toFixed(1)}" height="${heightValue.toFixed(1)}" rx="5">
+                <title>${escapeHtml(`${point.label}: ${formatChartValue(point.value, unit)}`)}</title>
+              </rect>
+              <text class="chart-tick" x="${(x + barWidth / 2).toFixed(1)}" y="${height - 18}" text-anchor="middle">${escapeHtml(
+                truncateChartLabel(point.label, 9),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, unit)}
+          ${bars}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 5}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Driver",
+          )}</text>
+          <text class="chart-axis-label" x="16" y="${height / 2}" text-anchor="middle" transform="rotate(-90 16 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || unit || "Value")}</text>
+        </svg>`;
+      }
+
+      function renderScatterPlotChart(artifact) {
+        const points = chartPoints(artifact).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
+        if (points.length < 3) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const width = 680;
+        const height = 230;
+        const margin = { top: 18, right: 20, bottom: 42, left: 60 };
+        const plotWidth = width - margin.left - margin.right;
+        const plotHeight = height - margin.top - margin.bottom;
+        const [xMin, xMax] = chartExtent(points.map((point) => point.x), false);
+        const [yMin, yMax] = chartExtent(points.map((point) => point.y), false);
+        const xUnit = artifact?.spec?.encoding?.x_unit || "";
+        const yUnit = artifact?.spec?.encoding?.y_unit || "";
+        const xFor = (value) => margin.left + ((value - xMin) / (xMax - xMin)) * plotWidth;
+        const yFor = (value) => margin.top + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+        const dots = points
+          .map((point, index) => `<g>
+            <circle class="chart-point" cx="${xFor(point.x).toFixed(1)}" cy="${yFor(point.y).toFixed(
+              1,
+            )}" r="5" fill="${chartColor(index)}">
+              <title>${escapeHtml(
+                `${point.label}: ${formatChartValue(point.x, xUnit)} / ${formatChartValue(point.y, yUnit)}`,
+              )}</title>
+            </circle>
+            <text class="chart-tick" x="${(xFor(point.x) + 7).toFixed(1)}" y="${(yFor(point.y) - 6).toFixed(
+              1,
+            )}">${escapeHtml(truncateChartLabel(point.label, 10))}</text>
+          </g>`)
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, yUnit)}
+          ${dots}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 4}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "X metric",
+          )}</text>
+          <text class="chart-axis-label" x="16" y="${height / 2}" text-anchor="middle" transform="rotate(-90 16 ${
+            height / 2
+          })">${escapeHtml(artifact?.spec?.y_label || "Y metric")}</text>
+        </svg>`;
+      }
+
+      function renderSmallMultiplePanelChart(artifact) {
+        const series = chartSeries(artifact).slice(0, 6);
+        if (series.length < 2) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        const width = 680;
+        const columns = 2;
+        const panelWidth = width / columns;
+        const panelHeight = 128;
+        const rows = Math.ceil(series.length / columns);
+        const height = rows * panelHeight;
+        const panels = series
+          .map((item, index) => {
+            const col = index % columns;
+            const row = Math.floor(index / columns);
+            const x0 = col * panelWidth;
+            const y0 = row * panelHeight;
+            const margin = { top: y0 + 24, right: width - x0 - panelWidth + 18, bottom: height - y0 - panelHeight + 26, left: x0 + 48 };
+            const plotWidth = panelWidth - 66;
+            const plotHeight = panelHeight - 52;
+            const [yMin, yMax] = chartExtent(item.points.map((point) => point.value), false);
+            const labels = item.points.map((point) => point.label);
+            const xFor = (pointIndex) =>
+              x0 + 48 + (labels.length === 1 ? plotWidth / 2 : (plotWidth * pointIndex) / (labels.length - 1));
+            const yFor = (value) => y0 + 24 + plotHeight - ((value - yMin) / (yMax - yMin)) * plotHeight;
+            const path = item.points
+              .map((point, pointIndex) => `${pointIndex === 0 ? "M" : "L"} ${xFor(pointIndex).toFixed(1)} ${yFor(point.value).toFixed(1)}`)
+              .join(" ");
+            const last = item.points[item.points.length - 1];
+            return `<g>
+              <text class="chart-axis-label" x="${(x0 + 10).toFixed(1)}" y="${(y0 + 15).toFixed(
+                1,
+              )}">${escapeHtml(truncateChartLabel(item.name, 24))}</text>
+              ${renderChartGrid(margin, plotWidth, plotHeight, yMin, yMax, item.unit)}
+              <path class="chart-line secondary" d="${path}" stroke="${chartColor(index)}" />
+              <text class="chart-value-label" x="${(xFor(item.points.length - 1) + 6).toFixed(
+                1,
+              )}" y="${(yFor(last.value) - 5).toFixed(1)}">${escapeHtml(
+                formatChartValue(last.value, item.unit, true),
+              )}</text>
+            </g>`;
+          })
+          .join("");
+        return `<svg class="chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(
+          artifact.alt_text || artifact.title || "Aegis chart",
+        )}" preserveAspectRatio="xMidYMid meet">
+          <title>${escapeHtml(artifact.alt_text || artifact.title || "Aegis chart")}</title>
+          ${panels}
+          <text class="chart-axis-label" x="${width / 2}" y="${height - 5}" text-anchor="middle">${escapeHtml(
+            artifact?.spec?.x_label || "Period",
+          )}</text>
+        </svg>`;
+      }
+
+      function renderChartGraphic(artifact) {
+        const facts = chartFacts(artifact);
+        const points = chartPoints(artifact);
+        const series = chartSeries(artifact, facts);
+        const pointFacts = chartPointFacts(artifact);
+        if (!artifact?.spec || (!facts.length && !points.length && !series.length)) {
+          return '<div class="chart-placeholder">Chart data unavailable</div>';
+        }
+        if (artifact.spec.chart_type === "peer_bar" || artifact.spec.chart_type === "trend_bar") {
+          return renderPeerBarChart(artifact, facts.length ? facts : pointFacts);
+        }
+        if (artifact.spec.chart_type === "peer_rank_bar") {
+          return renderPeerRankBarChart(artifact, facts);
+        }
+        if (artifact.spec.chart_type === "trend_line") {
+          if (!facts.length && series.length) {
+            return renderMultiSeriesLineChart(artifact, facts);
+          }
+          return renderTrendLineChart(artifact, facts.length ? facts : pointFacts);
+        }
+        if (artifact.spec.chart_type === "multi_series_line") {
+          return renderMultiSeriesLineChart(artifact, facts);
+        }
+        if (artifact.spec.chart_type === "slopegraph") {
+          return renderSlopegraphChart(artifact, facts);
+        }
+        if (artifact.spec.chart_type === "delta_bar") {
+          return renderDeltaBarChart(artifact, facts);
+        }
+        if (artifact.spec.chart_type === "heatmap") {
+          return renderHeatmapChart(artifact, facts.length ? facts : pointFacts);
+        }
+        if (
+          artifact.spec.chart_type === "composition_stacked_bar" ||
+          artifact.spec.chart_type === "composition_100_bar"
+        ) {
+          return renderCompositionChart(artifact);
+        }
+        if (artifact.spec.chart_type === "waterfall") {
+          return renderWaterfallChart(artifact);
+        }
+        if (artifact.spec.chart_type === "scatter_plot") {
+          return renderScatterPlotChart(artifact);
+        }
+        if (artifact.spec.chart_type === "small_multiple_panel") {
+          return renderSmallMultiplePanelChart(artifact);
+        }
+        return '<div class="chart-placeholder">Unsupported chart type</div>';
+      }
+
+      function renderChartCard(chartId, evidenceRegistry = {}, chartArtifacts = {}) {
+        void evidenceRegistry;
+        const artifact = chartArtifacts[chartId];
+        const status = artifact?.status || "pending";
+        if (status === "hidden") {
+          return "";
+        }
+        const title = artifact?.title || `Chart ${chartId}`;
+        const subtitle = artifact?.subtitle || "Preparing source-grounded chart";
+        if (status === "ready" && artifact?.spec) {
+          return `<figure class="chart-card ready" data-chart-id="${escapeHtml(chartId)}">
+            <figcaption class="chart-head">
+              <div class="chart-title">${escapeHtml(title)}</div>
+              <div class="chart-subtitle">${escapeHtml(subtitle)}</div>
+            </figcaption>
+            <div class="chart-frame">${renderChartGraphic(artifact)}</div>
+            <div class="chart-foot"><span>Interactive source-grounded chart</span></div>
+          </figure>`;
+        }
+        if (status === "error") {
+          return `<aside class="chart-card error" data-chart-id="${escapeHtml(chartId)}">
+            <div class="chart-head">
+              <div class="chart-title">${escapeHtml(title)}</div>
+              <div class="chart-subtitle">Chart unavailable</div>
+            </div>
+          </aside>`;
+        }
+        return `<aside class="chart-card pending" data-chart-id="${escapeHtml(chartId)}">
+          <div class="chart-head">
+            <div class="chart-title">${escapeHtml(title)}</div>
+            <div class="chart-subtitle">${escapeHtml(subtitle)}</div>
+          </div>
+          <div class="chart-frame"><div class="chart-placeholder">Loading chart</div></div>
+        </aside>`;
+      }
+
+      function consumeList(lines, startIndex, evidenceRegistry = {}) {
+        const items = [];
+        let index = startIndex;
+        while (index < lines.length) {
+          const match = String(lines[index] || "").match(/^\s*[-*]\s+(.+)$/);
+          if (!match) {
+            break;
+          }
+          items.push(`<li>${renderInlineMarkdown(match[1], evidenceRegistry)}</li>`);
+          index += 1;
+        }
+        return { html: `<ul>${items.join("")}</ul>`, nextIndex: index };
+      }
+
+      function renderMarkdown(value, evidenceRegistry = {}, chartArtifacts = {}) {
+        const normalized = String(value || "")
+          .replaceAll("&lt;details&gt;", '<details class="transcript-excerpt">')
+          .replaceAll("&lt;/details&gt;", "</details>")
+          .replaceAll("&lt;summary&gt;", "<summary>")
+          .replaceAll("&lt;/summary&gt;", "</summary>")
+          .replace(/\[\[CHART_SLOT:[\s\S]*?\]\]/g, "");
+        const lines = normalized.split(/\n/);
+        const blocks = [];
+
+        for (let index = 0; index < lines.length;) {
+          const line = String(lines[index] || "");
+          const trimmed = line.trim();
+
+          if (!trimmed) {
+            index += 1;
+            continue;
+          }
+
+          const chart = trimmed.match(/^\[\[CHART:(C\d+)\]\]$/);
+          if (chart) {
+            blocks.push(renderChartCard(chart[1], evidenceRegistry, chartArtifacts));
+            index += 1;
+            continue;
+          }
+
+          if (isMarkdownTableStart(lines, index)) {
+            const table = renderMarkdownTable(lines, index, evidenceRegistry);
+            blocks.push(table.html);
+            index = table.nextIndex;
+            continue;
+          }
+
+          const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+          if (heading) {
+            const level = heading[1].length;
+            blocks.push(`<h${level}>${renderInlineMarkdown(heading[2], evidenceRegistry)}</h${level}>`);
+            index += 1;
+            continue;
+          }
+
+          if (/^\s*[-*]\s+/.test(line)) {
+            const list = consumeList(lines, index, evidenceRegistry);
+            blocks.push(list.html);
+            index = list.nextIndex;
+            continue;
+          }
+
+          if (trimmed.startsWith("<details") || trimmed.startsWith("</details>") || trimmed.startsWith("<summary") || trimmed.startsWith("</summary>")) {
+            blocks.push(trimmed);
+            index += 1;
+            continue;
+          }
+
+          const paragraph = [trimmed];
+          index += 1;
+          while (
+            index < lines.length &&
+            String(lines[index] || "").trim() &&
+            !isMarkdownTableStart(lines, index) &&
+            !String(lines[index] || "").trim().match(/^(#{1,3})\s+/) &&
+            !/^\s*[-*]\s+/.test(String(lines[index] || ""))
+          ) {
+            paragraph.push(String(lines[index] || "").trim());
+            index += 1;
+          }
+          blocks.push(`<p>${renderInlineMarkdown(paragraph.join("<br />"), evidenceRegistry)}</p>`);
+        }
+
+        return blocks.join("");
+      }
+
+      function titleCaseSource(value) {
+        const normalized = String(value || "")
+          .replaceAll("_", " ")
+          .replaceAll("-", " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        const lower = normalized.toLowerCase();
+
+        if (lower === "rts") {
+          return "RTS";
+        }
+        if (lower === "pillar3" || lower === "pillar 3") {
+          return "Pillar 3";
+        }
+
+        return normalized
+          .replace(/\b\w/g, (char) => char.toUpperCase())
+          .replace(/\bRts\b/g, "RTS");
+      }
+
+      function normalizeFinalShell(shell) {
+        const normalized = shell || {};
+        return {
+          render_mode: normalized.render_mode || "custom",
+          summary: normalized.summary || null,
+          tiles: Array.isArray(normalized.tiles) ? normalized.tiles.slice(0, 4) : [],
+          body_style: normalized.body_style || "user_requested_format",
+        };
+      }
+
+      function renderMetricTiles(tiles, evidenceRegistry) {
+        if (!tiles.length) {
+          return "";
+        }
+
+        return `<div class="metric-grid">${tiles
+          .map((tile) => {
+            const contextText = stripEvidenceMarkers(tile.context || "");
+            return `<div class="metric-card"><div class="metric-label">${escapeHtml(
+              stripEvidenceMarkers(tile.label || "Metric"),
+            )}</div><div class="metric-value">${escapeHtml(
+              stripEvidenceMarkers(tile.value || "-"),
+            )}</div>${
+              contextText ? `<div class="metric-context">${escapeHtml(contextText)}</div>` : ""
+            }</div>`;
+          })
+          .join("")}</div>`;
+      }
+
+      function renderFinalBody(turn) {
+        if (!turn.finalBody) {
+          renderFinalResponseShell(turn, turn.responseShell || null);
+        }
+        const compactText = String(turn.answerText || "").replace(/\n{3,}/g, "\n\n");
+        turn.finalBody.classList.toggle("drafting", !compactText.trim());
+        if (!compactText.trim()) {
+          turn.finalBody.innerHTML = "";
+          return;
+        }
+        turn.finalBody.innerHTML = renderMarkdown(
+          escapeHtml(compactText),
+          turn.evidenceRegistry,
+          turn.chartArtifacts,
+        );
+      }
+
+      function renderFinalResponseShell(turn, shellInput) {
+        const shell = normalizeFinalShell(shellInput);
+        turn.responseShell = shell;
+        turn.responseStarted = true;
+        turn.progressLog = null;
+        turn.main.className = "main-response polished";
+        turn.main.innerHTML = "";
+        removeStatusTrace(turn);
+
+        const article = document.createElement("article");
+        article.className = `research-answer ${escapeHtml(shell.render_mode)}`;
+        article.dataset.bodyStyle = shell.body_style;
+
+        if (shell.summary) {
+          const summary = shell.summary;
+          const hero = document.createElement("section");
+          hero.className = "answer-hero";
+          hero.innerHTML = `<div class="answer-eyebrow">${escapeHtml(
+            stripEvidenceMarkers(summary.eyebrow || "Aegis research brief"),
+          )}</div><h2 class="answer-headline">${escapeHtml(
+            stripEvidenceMarkers(summary.headline || "Research summary"),
+          )}</h2>${
+            summary.dek
+              ? `<p class="answer-dek">${escapeHtml(stripEvidenceMarkers(summary.dek))}</p>`
+              : ""
+          }`;
+          article.appendChild(hero);
+        }
+
+        const metricHtml = renderMetricTiles(shell.tiles || [], turn.evidenceRegistry);
+        if (metricHtml) {
+          const metrics = document.createElement("div");
+          metrics.innerHTML = metricHtml;
+          article.append(...Array.from(metrics.childNodes));
+        }
+
+        const body = document.createElement("section");
+        body.className = "answer-section final-body";
+        if (!shell.summary && !(shell.tiles || []).length) {
+          body.classList.add("body-only");
+        }
+        article.appendChild(body);
+        turn.main.appendChild(article);
+        turn.finalBody = body;
+        renderFinalBody(turn);
+      }
+
+      function startFinalResponse(shell) {
+        const turn = beginAssistantTurn();
+        turn.answerText = "";
+        renderFinalResponseShell(turn, shell);
+        scrollToBottom();
+      }
+
+      function scrollToBottom() {
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      function appendMessage(role, label, content) {
+        const wrapper = document.createElement("div");
+        wrapper.className = `message ${role}`;
+        const labelEl = document.createElement("div");
+        labelEl.className = "message-label";
+        labelEl.textContent = label;
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.innerHTML = renderMarkdown(escapeHtml(content));
+        wrapper.append(labelEl, bubble);
+        messages.appendChild(wrapper);
+        scrollToBottom();
+      }
+
+      function beginAssistantTurn() {
+        if (activeTurn) {
+          return activeTurn;
+        }
+
+        const root = document.createElement("div");
+        root.className = "assistant-turn";
+
+        const statusPanel = document.createElement("div");
+        statusPanel.className = "status-panel collapsed";
+
+        const statusButton = document.createElement("button");
+        statusButton.type = "button";
+        statusButton.className = "status-toggle";
+        statusButton.setAttribute("aria-expanded", "false");
+
+        const loader = document.createElement("span");
+        loader.className = "loader";
+        const statusText = document.createElement("span");
+        statusText.className = "status-text";
+        statusText.textContent = "Starting";
+        const statusCount = document.createElement("span");
+        statusCount.className = "status-count";
+        statusCount.textContent = "0 updates";
+        statusButton.append(loader, statusText, statusCount);
+
+        const timeline = document.createElement("div");
+        timeline.className = "status-timeline";
+
+        statusButton.addEventListener("click", () => {
+          statusPanel.classList.toggle("collapsed");
+          statusButton.setAttribute(
+            "aria-expanded",
+            String(!statusPanel.classList.contains("collapsed")),
+          );
+        });
+
+        statusPanel.append(statusButton, timeline);
+
+        const responseFrame = document.createElement("div");
+        responseFrame.className = "response-frame";
+
+        const main = document.createElement("div");
+        main.className = "main-response pending";
+        main.textContent = "Preparing response";
+
+        const evidence = document.createElement("div");
+        evidence.className = "evidence-stack empty";
+
+        responseFrame.append(main, evidence);
+        root.append(statusPanel, responseFrame);
+        messages.appendChild(root);
+
+        activeTurn = {
+          root,
+          responseFrame,
+          statusPanel,
+          statusText,
+          statusCount,
+          timeline,
+          main,
+          evidence,
+          statusButton,
+          progressLog: null,
+          statusEvents: [],
+          evidenceRegistry: { __flat: {} },
+          researchStatus: null,
+          researchSnapshotStarted: false,
+          researchProgressLabel: "",
+          responseStarted: false,
+          responseShell: null,
+          finalBody: null,
+          chartArtifacts: {},
+          hasResearch: false,
+          answerText: "",
+          requestText: currentUserRequest,
+          waitingForUser: false,
+        };
+        root.__aegisTurn = activeTurn;
+        scrollToBottom();
+        return activeTurn;
+      }
+
+      function updateStatusCount(turn) {
+        if (turn.researchProgressLabel) {
+          turn.statusCount.textContent = turn.researchProgressLabel;
+          return;
+        }
+        turn.statusCount.textContent =
+          turn.statusEvents.length === 1 ? "1 update" : `${turn.statusEvents.length} updates`;
+      }
+
+      function addStatusTimelineRow(turn, source, text) {
+        turn.statusEvents.push({ source, text });
+        updateStatusCount(turn);
+
+        const row = document.createElement("div");
+        row.className = "status-row";
+        row.innerHTML = `<strong>${escapeHtml(source)}</strong>${escapeHtml(text)}`;
+        turn.timeline.appendChild(row);
+      }
+
+      function appendProgressSummary(turn, source, text) {
+        if (turn.responseStarted || turn.waitingForUser) {
+          return;
+        }
+
+        if (!turn.progressLog) {
+          turn.main.className = "main-response pending status-feed";
+          turn.main.innerHTML = "";
+          turn.progressLog = document.createElement("ol");
+          turn.progressLog.className = "progress-log";
+          turn.main.appendChild(turn.progressLog);
+        }
+
+        const item = document.createElement("li");
+        item.className = "progress-entry";
+        item.innerHTML = `<strong>${escapeHtml(source)}</strong>${escapeHtml(text)}`;
+        turn.progressLog.appendChild(item);
+      }
+
+      function formatSnapshotTime(value) {
+        if (!value) {
+          return "Live";
+        }
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) {
+          return "Live";
+        }
+        return `Updated ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+      }
+
+      function ensureResearchStatusBoard(turn) {
+        if (turn.researchStatus) {
+          return turn.researchStatus;
+        }
+
+        turn.main.className = "main-response pending status-feed";
+        turn.main.innerHTML = "";
+        turn.progressLog = null;
+
+        const board = document.createElement("section");
+        board.className = "research-status-board";
+        board.innerHTML = `
+          <div class="research-status-head">
+            <div class="research-status-title">Research status</div>
+            <div class="research-status-updated">Live</div>
+          </div>
+          <table class="research-status-table" aria-label="Research source status">
+            <colgroup>
+              <col class="source-col" />
+              <col class="status-col" />
+              <col />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Status</th>
+                <th>Quick summary</th>
+              </tr>
+            </thead>
+            <tbody class="research-status-body">
+              <tr>
+                <td colspan="3" class="research-summary-empty">Waiting for research to start.</td>
+              </tr>
+            </tbody>
+          </table>
+        `;
+        turn.main.appendChild(board);
+        turn.researchStatus = {
+          board,
+          updated: board.querySelector(".research-status-updated"),
+          body: board.querySelector(".research-status-body"),
+        };
+        return turn.researchStatus;
+      }
+
+      function getResearchSummaryKeys(item) {
+        const keys = [item?.source_id, item?.source_label]
+          .map((value) => String(value || "").toLowerCase().trim())
+          .filter(Boolean);
+        return Array.from(new Set(keys));
+      }
+
+      function getResearchStatusClass(value) {
+        return String(value || "pending").replace(/[^a-z0-9_-]/gi, "_");
+      }
+
+      function indexCompletedResearchSummaries(snapshot) {
+        const summaries = Array.isArray(snapshot?.completed_summaries)
+          ? snapshot.completed_summaries
+          : [];
+        const index = new Map();
+        summaries.forEach((item) => {
+          getResearchSummaryKeys(item).forEach((key) => {
+            index.set(key, item);
+          });
+        });
+        return index;
+      }
+
+      function getResearchRowSummary(row, summaries) {
+        const completed = getResearchSummaryKeys(row)
+          .map((key) => summaries.get(key))
+          .find(Boolean);
+        if (completed) {
+          return completed.summary_text || completed.quick_summary || "Research completed.";
+        }
+        return row.detail || "Research pending.";
+      }
+
+      function renderResearchStatusSnapshot(snapshot) {
+        const turn = beginAssistantTurn();
+        turn.hasResearch = true;
+        turn.researchSnapshotStarted = true;
+        if (turn.responseStarted || turn.waitingForUser) {
+          return;
+        }
+
+        const board = ensureResearchStatusBoard(turn);
+        const rows = Array.isArray(snapshot?.rows) ? snapshot.rows : [];
+        const summaries = indexCompletedResearchSummaries(snapshot);
+        const displayRows = rows.length
+          ? rows
+          : Array.from(new Set(summaries.values())).map((item) => ({
+              source_id: item.source_id,
+              source_label: item.source_label,
+              status: "complete",
+              status_label: "Complete",
+            }));
+        board.updated.textContent = formatSnapshotTime(snapshot?.generated_at);
+        if (turn.statusText) {
+          turn.statusText.textContent = snapshot?.headline || "Research in progress.";
+        }
+        const completedSources = Number(snapshot?.completed_source_count || 0);
+        const totalSources = Number(snapshot?.total_source_count || displayRows.length || 0);
+        turn.researchProgressLabel = totalSources ? `${completedSources}/${totalSources} sources` : "";
+        updateStatusCount(turn);
+        if (!displayRows.length) {
+          board.body.innerHTML =
+            '<tr><td colspan="3" class="research-summary-empty">Waiting for research to start.</td></tr>';
+          scrollToBottom();
+          return;
+        }
+        board.body.innerHTML = displayRows
+          .map((row) => {
+            const status = getResearchStatusClass(row.status);
+            const summary = getResearchRowSummary(row, summaries);
+            return `<tr class="research-status-row ${status}">
+              <td>
+                <span class="research-status-source">
+                  <span class="research-source-dot"></span>
+                  <span class="research-source-name">${escapeHtml(
+                    row.source_label || row.source_id || "Source",
+                  )}</span>
+                </span>
+              </td>
+              <td><span class="research-source-status">${escapeHtml(
+                row.status_label || "Pending",
+              )}</span></td>
+              <td><div class="research-summary-body">${escapeHtml(summary)}</div></td>
+            </tr>`;
+          })
+          .join("");
+        scrollToBottom();
+      }
+
+      function removeStatusTrace(turn) {
+        if (!turn) {
+          return;
+        }
+        turn.statusPanel?.remove();
+        turn.statusPanel = null;
+        turn.statusButton = null;
+        turn.statusText = null;
+        turn.statusCount = null;
+        turn.timeline = null;
+      }
+
+      function finishAssistantTurn() {
+        if (!activeTurn) {
+          return;
+        }
+        const completedRoot = activeTurn.root;
+        const renderedFinal =
+          activeTurn.responseStarted && (activeTurn.answerText.trim() || activeTurn.responseShell);
+        if (!renderedFinal && !activeTurn.waitingForUser) {
+          activeTurn.statusPanel?.classList.add("hidden");
+        }
+        if (!activeTurn.responseStarted && !activeTurn.waitingForUser) {
+          activeTurn.main.classList.add("empty");
+        }
+        activeTurn = null;
+        if (renderedFinal) {
+          completedRoot.scrollIntoView({ block: "start" });
+        } else {
+          scrollToBottom();
+        }
+      }
+
+      function completeChoiceTurn(turn) {
+        if (!turn) {
+          return;
+        }
+        turn.waitingForUser = false;
+        if (turn.statusText) {
+          turn.statusText.textContent = "Selection received";
+        }
+        turn.statusPanel?.classList.add("hidden", "collapsed");
+      }
+
+      function addTurnStatus(label, content, options = {}) {
+        const turn = beginAssistantTurn();
+        if (turn.responseStarted) {
+          return;
+        }
+        if (options.research) {
+          turn.hasResearch = true;
+        }
+        const text = content || "Working";
+        const source = label || "Aegis";
+        if (options.summary) {
+          const summarySource = String(source).toLowerCase() === "aegis" ? "Status summary" : source;
+          appendProgressSummary(turn, summarySource, text);
+          scrollToBottom();
+          return;
+        }
+        if (!options.research || !turn.researchSnapshotStarted) {
+          turn.statusText.textContent = text;
+        }
+        addStatusTimelineRow(turn, source, text);
+        scrollToBottom();
+      }
+
+      function appendAgentChunk(content) {
+        const turn = beginAssistantTurn();
+        if (!turn.responseStarted) {
+          turn.answerText = "";
+          renderFinalResponseShell(turn, {
+            render_mode: "custom",
+            summary: null,
+            tiles: [],
+            body_style: "user_requested_format",
+          });
+        }
+        turn.answerText += content || "";
+        renderFinalBody(turn);
+        scrollToBottom();
+      }
+
+      function mergeChartArtifact(artifact) {
+        if (!artifact?.chart_id) {
+          return;
+        }
+        const turn = beginAssistantTurn();
+        turn.chartArtifacts[artifact.chart_id] = artifact;
+        if (turn.finalBody) {
+          renderFinalBody(turn);
+          scrollToBottom();
+        }
+      }
+
+      function mergeEvidenceRegistry(turn, registry) {
+        Object.entries(registry || {}).forEach(([sourceId, sourceGroup]) => {
+          const targetGroup = turn.evidenceRegistry[sourceId] || {};
+          Object.entries(sourceGroup || {}).forEach(([evidenceId, reference]) => {
+            targetGroup[evidenceId] = reference;
+            turn.evidenceRegistry.__flat[evidenceId] = reference;
+          });
+          turn.evidenceRegistry[sourceId] = targetGroup;
+        });
+        updateEvidenceSummary(turn);
+        if (turn.responseShell) {
+          renderFinalResponseShell(turn, turn.responseShell);
+        }
+      }
+
+      function updateEvidenceSummary(turn) {
+        const panel = turn.evidencePanel;
+        if (!panel) {
+          return;
+        }
+
+        const sourceCount = panel.tabs.querySelectorAll(".evidence-tab").length;
+        const referenceCount = Object.keys(turn.evidenceRegistry.__flat || {}).length;
+        panel.title.textContent =
+          sourceCount === 1 ? "Evidence · 1 source" : `Evidence · ${sourceCount} sources`;
+        panel.hint.textContent = referenceCount
+          ? `${referenceCount} linked references`
+          : "Open retrieved source findings";
+      }
+
+      function ensureEvidencePanel(turn) {
+        if (turn.evidencePanel) {
+          return turn.evidencePanel;
+        }
+
+        const panel = document.createElement("div");
+        panel.className = "evidence-panel collapsed";
+
+        const summary = document.createElement("button");
+        summary.type = "button";
+        summary.className = "evidence-summary";
+        summary.setAttribute("aria-expanded", "false");
+        const title = document.createElement("div");
+        title.className = "evidence-title";
+        title.textContent = "Evidence · 0 sources";
+        const hint = document.createElement("div");
+        hint.className = "evidence-hint";
+        hint.textContent = "Open retrieved source findings";
+        summary.append(title, hint);
+        summary.addEventListener("click", () => {
+          panel.classList.toggle("collapsed");
+          summary.setAttribute(
+            "aria-expanded",
+            String(!panel.classList.contains("collapsed")),
+          );
+        });
+
+        const tabs = document.createElement("div");
+        tabs.className = "evidence-tabs";
+
+        const content = document.createElement("div");
+        content.className = "evidence-content empty";
+
+        panel.append(summary, tabs, content);
+        turn.evidence.appendChild(panel);
+        turn.evidencePanel = { panel, summary, title, hint, tabs, content };
+        updateEvidenceSummary(turn);
+        return turn.evidencePanel;
+      }
+
+      function setActiveEvidenceTab(panel, activeButton) {
+        const isCollapsing = activeButton.getAttribute("aria-expanded") === "true";
+
+        panel.tabs.querySelectorAll(".evidence-tab").forEach((button) => {
+          button.setAttribute("aria-expanded", "false");
+        });
+
+        if (isCollapsing) {
+          panel.content.classList.add("empty");
+          panel.content.innerHTML = "";
+          return;
+        }
+
+        activeButton.setAttribute("aria-expanded", "true");
+        panel.content.classList.remove("empty");
+        panel.content.innerHTML = activeButton.evidenceHtml || "";
+      }
+
+      function appendSubagent(name, content) {
+        const turn = beginAssistantTurn();
+        turn.evidence.classList.remove("empty");
+        const panel = ensureEvidencePanel(turn);
+        const sourceKey = String(name || "source").toLowerCase();
+        const sourceLabel = titleCaseSource(name || "source");
+        const renderedEvidence = renderEvidencePanelContent(sourceKey, sourceLabel, content);
+        let button = Array.from(panel.tabs.querySelectorAll(".evidence-tab")).find(
+          (node) => node.dataset.sourceKey === sourceKey,
+        );
+
+        if (!button) {
+          button = document.createElement("button");
+          button.type = "button";
+          button.className = "evidence-tab";
+          button.dataset.sourceKey = sourceKey;
+          button.textContent = sourceLabel;
+          button.setAttribute("aria-expanded", "false");
+          button.addEventListener("click", () => setActiveEvidenceTab(panel, button));
+          panel.tabs.appendChild(button);
+        }
+
+        button.evidenceHtml = renderedEvidence;
+        turn.hasResearch = true;
+        updateEvidenceSummary(turn);
+        if (button.getAttribute("aria-expanded") === "true") {
+          panel.content.innerHTML = renderedEvidence;
+        }
+        scrollToBottom();
+      }
+
+      function appendChoiceCard(card) {
+        const turn = beginAssistantTurn();
+        turn.waitingForUser = true;
+        turn.main.className = "main-response";
+        turn.main.innerHTML = "";
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "choice";
+        wrapper.dataset.cardId = card.card_id;
+
+        const title = document.createElement("h3");
+        title.textContent = card.question;
+        const grid = document.createElement("div");
+        grid.className = "choice-grid";
+
+        card.options.forEach((option) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.innerHTML = `
+            <span class="choice-title">${escapeHtml(option.label)}</span>
+            ${
+              option.description
+                ? `<span class="choice-desc">${escapeHtml(option.description)}</span>`
+                : ""
+            }
+          `;
+          button.addEventListener("click", () => {
+            wrapper.classList.add("selected");
+            button.classList.add("selected-option");
+            grid.querySelectorAll("button").forEach((node) => {
+              node.disabled = true;
+            });
+            completeChoiceTurn(turn);
+            appendMessage("user", "You", option.label);
+            activeTurn = null;
+            sendPayload({
+              type: "ui_selection",
+              content: option.label,
+              ui_selection: {
+                card_id: card.card_id,
+                option_id: option.id,
+                label: option.label,
+                metadata: option.metadata || {},
+              },
+            });
+          });
+          grid.appendChild(button);
+        });
+
+        wrapper.append(title, grid);
+        turn.main.appendChild(wrapper);
+        scrollToBottom();
+      }
+
+      function sendPayload(payload) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          appendMessage("error", "Error", "WebSocket is not connected.");
+          return;
+        }
+        const sourceFilter = getSelectedSourceFilter();
+        ws.send(
+          JSON.stringify(sourceFilter ? { ...payload, source_filter: sourceFilter } : payload),
+        );
+      }
+
+      function handleEvent(event) {
+        if (event.metadata?.evidence_registry) {
+          mergeEvidenceRegistry(beginAssistantTurn(), event.metadata.evidence_registry);
+          if (event.metadata?.internal === true) {
+            return;
+          }
+        }
+
+        if (event.type === "final_response_start") {
+          startFinalResponse(event.content || {});
+        } else if (event.type === "agent") {
+          appendAgentChunk(event.content || "");
+        } else if (event.type === "chart_artifact") {
+          mergeChartArtifact(event.content || {});
+        } else if (event.type === "agent_status") {
+          addTurnStatus(event.name || "Aegis", event.content || "", {
+            summary: event.metadata?.summary === true,
+            research: true,
+          });
+        } else if (event.type === "research_status_snapshot") {
+          renderResearchStatusSnapshot(event.content || {});
+        } else if (event.type === "subagent_start") {
+          addTurnStatus(event.name || "Source", event.content || "Started", { research: true });
+        } else if (event.type === "subagent") {
+          appendSubagent(event.name || "source", event.content || "");
+        } else if (event.type === "ui_card") {
+          appendChoiceCard(event.content);
+        } else if (event.type === "status") {
+          connection.textContent = event.content || "";
+          if (event.content === "Thinking") {
+            addTurnStatus("Aegis", "Thinking");
+          } else if (event.content === "Ready") {
+            finishAssistantTurn();
+          }
+        } else if (event.type === "error") {
+          appendMessage("error", "Error", event.content || "Unknown error");
+          finishAssistantTurn();
+        }
+      }
+
+      function connect() {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+        ws.addEventListener("open", () => {
+          connection.textContent = "Connected";
+        });
+
+        ws.addEventListener("message", (raw) => {
+          handleEvent(JSON.parse(raw.data));
+        });
+
+        ws.addEventListener("close", () => {
+          connection.textContent = "Disconnected";
+          setTimeout(connect, 1500);
+        });
+
+        ws.addEventListener("error", () => {
+          connection.textContent = "Connection error";
+        });
+      }
+
+      messages.addEventListener("click", (event) => {
+        const link = event.target.closest(".evidence-link");
+        if (!link) {
+          return;
+        }
+
+        const shouldOpenInPreview =
+          event.button === 0 &&
+          !event.metaKey &&
+          !event.ctrlKey &&
+          !event.shiftKey &&
+          !event.altKey;
+        if (shouldOpenInPreview) {
+          event.preventDefault();
+          openSourcePreview(referenceForEvidenceLink(link), link);
+        } else if (link.getAttribute("href") === "#") {
+          event.preventDefault();
+        }
+
+        const sourceKey = link.dataset.sourceKey;
+        if (!sourceKey) {
+          return;
+        }
+
+        const turnRoot = link.closest(".assistant-turn");
+        const sourceTab = turnRoot?.querySelector(
+          `.evidence-tab[data-source-key="${CSS.escape(sourceKey)}"]`,
+        );
+        if (sourceTab && sourceTab.getAttribute("aria-expanded") !== "true") {
+          const panel = sourceTab.closest(".evidence-panel");
+          const summary = panel?.querySelector(".evidence-summary");
+          if (panel?.classList.contains("collapsed")) {
+            panel.classList.remove("collapsed");
+            summary?.setAttribute("aria-expanded", "true");
+          }
+          sourceTab.click();
+        }
+      });
+
+      previewRecentButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const willOpen = previewRecentMenu.hidden;
+        previewRecentMenu.hidden = !willOpen;
+        previewRecentButton.setAttribute("aria-expanded", String(willOpen));
+      });
+
+      previewRecentMenu.addEventListener("click", (event) => {
+        const item = event.target.closest(".preview-recent-item");
+        if (!item) {
+          return;
+        }
+        const index = Number.parseInt(item.dataset.recentIndex || "", 10);
+        const entry = previewState.recent[index];
+        if (!entry) {
+          return;
+        }
+        previewRecentMenu.hidden = true;
+        previewRecentButton.setAttribute("aria-expanded", "false");
+        previewState.current = { ...entry, target: { ...entry.target } };
+        previewState.zoom = 1;
+        rememberPreviewEntry(previewState.current);
+        renderPreviewState({ reload: true });
+      });
+
+      document.addEventListener("click", (event) => {
+        if (event.target.closest(".preview-recent")) {
+          return;
+        }
+        previewRecentMenu.hidden = true;
+        previewRecentButton.setAttribute("aria-expanded", "false");
+      });
+
+      previewPrevious.addEventListener("click", () => navigatePreviewLocation(-1));
+      previewNext.addEventListener("click", () => navigatePreviewLocation(1));
+      previewZoomOut.addEventListener("click", () => setPreviewZoom(-0.1));
+      previewZoomIn.addEventListener("click", () => setPreviewZoom(0.1));
+
+      previewDownload.addEventListener("click", (event) => {
+        if (previewDownload.classList.contains("disabled")) {
+          event.preventDefault();
+        }
+      });
+
+      sourcePreviewFrame.addEventListener("load", syncPreviewLocationFromFrame);
+
+      composer.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const content = input.value.trim();
+        if (!content) {
+          return;
+        }
+        activeTurn = null;
+        currentUserRequest = content;
+        appendMessage("user", "You", content);
+        beginAssistantTurn();
+        sendPayload({ type: "message", content });
+        input.value = "";
+      });
+
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          composer.requestSubmit();
+        }
+      });
+
+      updateSourceFilterState();
+      connect();
+    </script>
+  </body>
+</html>

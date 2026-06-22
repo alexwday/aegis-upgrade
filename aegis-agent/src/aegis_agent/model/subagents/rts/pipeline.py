@@ -11,6 +11,7 @@ from sqlalchemy import text
 from ....connections.llm_connector import complete_with_tools, embed_batch
 from ....connections.postgres_connector import get_connection
 from ....utils.logging import get_logger
+from ....utils.model_tiers import resolve_research_model
 from ....utils.prompt_loader import load_prompt_from_db
 from ....utils.settings import config
 
@@ -309,7 +310,9 @@ async def prepare_query(
     return prepared
 
 
-def normalize_prepared_query(parsed: Dict[str, Any], original_query: str) -> Dict[str, Any]:
+def normalize_prepared_query(
+    parsed: Dict[str, Any], original_query: str
+) -> Dict[str, Any]:
     """Validate and cap query-prep output."""
     deterministic_terms = extract_search_terms(original_query)
     metrics = merge_unique_terms(
@@ -328,7 +331,9 @@ def normalize_prepared_query(parsed: Dict[str, Any], original_query: str) -> Dic
         "sub_queries": limit_unique_texts(parsed.get("sub_queries", []), 3),
         "keywords": keywords,
         "metrics": metrics,
-        "hyde_answer": soften_hyde_answer(str(parsed.get("hyde_answer") or original_query)),
+        "hyde_answer": soften_hyde_answer(
+            str(parsed.get("hyde_answer") or original_query)
+        ),
         "embeddings": {},
         "usage": {},
     }
@@ -352,12 +357,15 @@ def fallback_prepared_query(query_text: str) -> Dict[str, Any]:
     }
 
 
-async def embed_prepared_query(prepared: Dict[str, Any], context: Dict[str, Any]) -> None:
+async def embed_prepared_query(
+    prepared: Dict[str, Any], context: Dict[str, Any]
+) -> None:
     """Batch embed all prepared query facets."""
     logger = get_logger()
     inputs = [("rewritten", prepared["rewritten_query"])]
     inputs.extend(
-        (f"sub_query_{index}", query) for index, query in enumerate(prepared["sub_queries"])
+        (f"sub_query_{index}", query)
+        for index, query in enumerate(prepared["sub_queries"])
     )
     if prepared["keywords"]:
         inputs.append(("keywords", " ".join(prepared["keywords"])))
@@ -391,7 +399,9 @@ async def multi_strategy_search(
     search_semaphore: Optional[asyncio.Semaphore] = None,
 ) -> List[Dict[str, Any]]:
     """Run all vector, BM25, and metadata-match strategies and fuse scores."""
-    search_semaphore = search_semaphore or asyncio.Semaphore(MAX_PARALLEL_SEARCH_QUERIES)
+    search_semaphore = search_semaphore or asyncio.Semaphore(
+        MAX_PARALLEL_SEARCH_QUERIES
+    )
     search_factories: List[Tuple[str, SearchFactory, bool, float]] = []
     embeddings = prepared.get("embeddings", {})
     if embeddings.get("rewritten"):
@@ -408,7 +418,9 @@ async def multi_strategy_search(
         search_factories.append(
             (
                 "section_summary",
-                lambda vector=embeddings["rewritten"]: search_section_summary(combo, vector, top_k),
+                lambda vector=embeddings["rewritten"]: search_section_summary(
+                    combo, vector, top_k
+                ),
                 True,
                 1.0,
             )
@@ -432,7 +444,9 @@ async def multi_strategy_search(
             search_factories.append(
                 (
                     "subquery_vector",
-                    lambda vector=vector: search_embedding_type(combo, vector, "content", top_k),
+                    lambda vector=vector: search_embedding_type(
+                        combo, vector, "content", top_k
+                    ),
                     True,
                     subquery_scale,
                 )
@@ -463,7 +477,12 @@ async def multi_strategy_search(
     bm25_query = build_bm25_query(prepared)
     if bm25_query:
         search_factories.append(
-            ("bm25", lambda query=bm25_query: bm25_search(combo, query, BM25_TOP_K), False, 1.0)
+            (
+                "bm25",
+                lambda query=bm25_query: bm25_search(combo, query, BM25_TOP_K),
+                False,
+                1.0,
+            )
         )
     if prepared.get("keywords"):
         search_factories.append(
@@ -723,7 +742,9 @@ async def jsonb_containment_search(
         candidates = []
         for row in result:
             candidate = row_to_candidate(row, 0.0)
-            haystack = json.dumps(candidate.get(column_name, []), default=str).casefold()
+            haystack = json.dumps(
+                candidate.get(column_name, []), default=str
+            ).casefold()
             candidate["raw_score"] = float(
                 sum(1 for term_value in safe_terms if term_value.casefold() in haystack)
             )
@@ -751,9 +772,13 @@ def fuse_strategy_batches(
                     "match_sources": [],
                 }
             strategy_score = normalized.get(key, 0.0)
-            weighted_score = FUSION_WEIGHTS.get(strategy_name, 0.0) * scale * strategy_score
+            weighted_score = (
+                FUSION_WEIGHTS.get(strategy_name, 0.0) * scale * strategy_score
+            )
             combined[key]["score"] += weighted_score
-            current_strategy_score = combined[key]["strategy_scores"].get(strategy_name, 0.0)
+            current_strategy_score = combined[key]["strategy_scores"].get(
+                strategy_name, 0.0
+            )
             combined[key]["strategy_scores"][strategy_name] = max(
                 current_strategy_score, strategy_score
             )
@@ -795,7 +820,9 @@ def normalize_strategy_scores(
     if max_value == 0:
         return {key: 1.0 for key in best_raw}
     if invert:
-        return {key: max(0.0, 1.0 - value / max_value) for key, value in best_raw.items()}
+        return {
+            key: max(0.0, 1.0 - value / max_value) for key, value in best_raw.items()
+        }
     return {key: max(0.0, value / max_value) for key, value in best_raw.items()}
 
 
@@ -820,7 +847,9 @@ async def rerank_candidates(
             context=context,
             max_tokens=800,
         )
-        valid_remove = normalize_remove_indices(parsed.get("remove_indices", []), len(candidates))
+        valid_remove = normalize_remove_indices(
+            parsed.get("remove_indices", []), len(candidates)
+        )
     except Exception as exc:  # pylint: disable=broad-except
         logger.warning(
             "subagent.rts.rerank_keep_all",
@@ -839,7 +868,11 @@ async def rerank_candidates(
         removed_count=len(valid_remove),
         kept_count=len(candidates) - len(valid_remove),
     )
-    return [candidate for index, candidate in enumerate(candidates) if index not in valid_remove]
+    return [
+        candidate
+        for index, candidate in enumerate(candidates)
+        if index not in valid_remove
+    ]
 
 
 async def gap_fill_one_page_gaps(
@@ -849,7 +882,9 @@ async def gap_fill_one_page_gaps(
     """Fill up to two missing PDF pages between retrieved chunks from the same file."""
     if not chunks:
         return []
-    search_semaphore = search_semaphore or asyncio.Semaphore(MAX_PARALLEL_SEARCH_QUERIES)
+    search_semaphore = search_semaphore or asyncio.Semaphore(
+        MAX_PARALLEL_SEARCH_QUERIES
+    )
     expanded: Dict[Tuple[str, str], Dict[str, Any]] = {
         candidate_key(chunk): chunk for chunk in chunks
     }
@@ -864,7 +899,8 @@ async def gap_fill_one_page_gaps(
             {
                 page_number
                 for page_number in (
-                    parse_page_number(chunk.get("chunk_id", "")) for chunk in file_chunks
+                    parse_page_number(chunk.get("chunk_id", ""))
+                    for chunk in file_chunks
                 )
                 if page_number is not None
             }
@@ -959,7 +995,9 @@ async def run_research_loop(
 ) -> Dict[str, Any]:
     """Run iterative research extraction with follow-up vector searches."""
     logger = get_logger()
-    search_semaphore = search_semaphore or asyncio.Semaphore(MAX_PARALLEL_SEARCH_QUERIES)
+    search_semaphore = search_semaphore or asyncio.Semaphore(
+        MAX_PARALLEL_SEARCH_QUERIES
+    )
     chunks = list(initial_chunks)
     seen_ids = {chunk["chunk_id"] for chunk in chunks}
     iterations = []
@@ -991,7 +1029,10 @@ async def run_research_loop(
             iteration.get("additional_queries", []),
             MAX_ADDITIONAL_QUERIES,
         )
-        if float(iteration.get("confidence", 0.0) or 0.0) >= RESEARCH_CONFIDENCE_STOP_THRESHOLD:
+        if (
+            float(iteration.get("confidence", 0.0) or 0.0)
+            >= RESEARCH_CONFIDENCE_STOP_THRESHOLD
+        ):
             stopping_reason = "high_confidence"
             break
         if not additional_queries:
@@ -1059,7 +1100,8 @@ async def call_research_iteration(
     except ValueError:
         retry_replacements = dict(replacements)
         retry_replacements["chunks"] = (
-            replacements["chunks"] + "\n\nCorrection: Return structured findings using the tool. "
+            replacements["chunks"]
+            + "\n\nCorrection: Return structured findings using the tool. "
             "Each finding needs finding, page, location_detail, and source_ref_ids. "
             "Do not return an empty findings array if the chunks contain relevant information."
         )
@@ -1076,7 +1118,9 @@ async def call_research_iteration(
     return {
         "iteration": iteration_number,
         "findings": findings,
-        "additional_queries": limit_unique_texts(additional_queries, MAX_ADDITIONAL_QUERIES),
+        "additional_queries": limit_unique_texts(
+            additional_queries, MAX_ADDITIONAL_QUERIES
+        ),
         "confidence": float(confidence),
         "usage": usage,
     }
@@ -1092,7 +1136,9 @@ async def search_additional_queries(
     """Embed additional research queries and run focused content-vector search."""
     if not queries:
         return []
-    search_semaphore = search_semaphore or asyncio.Semaphore(MAX_PARALLEL_SEARCH_QUERIES)
+    search_semaphore = search_semaphore or asyncio.Semaphore(
+        MAX_PARALLEL_SEARCH_QUERIES
+    )
     logger = get_logger()
     try:
         response = await embed_batch(input_texts=queries, context=context)
@@ -1107,7 +1153,11 @@ async def search_additional_queries(
 
     new_chunks: Dict[Tuple[str, str], Dict[str, Any]] = {}
     search_results = await asyncio.gather(
-        *[search_additional_vector(combo, vector, search_semaphore) for vector in vectors if vector]
+        *[
+            search_additional_vector(combo, vector, search_semaphore)
+            for vector in vectors
+            if vector
+        ]
     )
     for hits in search_results:
         for hit in hits:
@@ -1161,7 +1211,7 @@ async def call_tool_prompt(
         tools=prompt["tools"],
         context=context,
         llm_params={
-            "model": getattr(config.llm, RTS_MODEL_TIER).model,
+            "model": resolve_research_model(context, RTS_MODEL_TIER),
             "temperature": 0,
             "max_tokens": max_tokens,
             "tool_choice": resolve_tool_choice(prompt),
@@ -1181,7 +1231,9 @@ def resolve_tool_choice(prompt: Dict[str, Any]) -> Any:
     return tool_choice
 
 
-def load_stage_prompt(prompt_name: str, execution_id: Optional[str] = None) -> Dict[str, Any]:
+def load_stage_prompt(
+    prompt_name: str, execution_id: Optional[str] = None
+) -> Dict[str, Any]:
     """Load a stage prompt from PostgreSQL."""
     prompt_data = load_prompt_from_db(
         layer="rts",
@@ -1192,13 +1244,17 @@ def load_stage_prompt(prompt_name: str, execution_id: Optional[str] = None) -> D
     return normalize_db_stage_prompt(prompt_data, prompt_name)
 
 
-def normalize_db_stage_prompt(prompt_data: Dict[str, Any], prompt_name: str) -> Dict[str, Any]:
+def normalize_db_stage_prompt(
+    prompt_data: Dict[str, Any], prompt_name: str
+) -> Dict[str, Any]:
     """Normalize a prompts-table row into the local stage prompt schema."""
     if not isinstance(prompt_data, dict):
         raise ValueError(f"Prompt {prompt_name} was not found in the prompts table")
     system_prompt = prompt_data.get("system_prompt")
     user_prompt = prompt_data.get("user_prompt")
-    tool_definition = prompt_data.get("tool_definition") or prompt_data.get("tool_definitions")
+    tool_definition = prompt_data.get("tool_definition") or prompt_data.get(
+        "tool_definitions"
+    )
     if isinstance(tool_definition, dict):
         tools = [tool_definition]
     else:
@@ -1325,7 +1381,9 @@ def combo_params(combo: Dict[str, Any]) -> Dict[str, Any]:
     """Return normalized SQL parameters for a bank-period combination."""
     fiscal_year = str(combo.get("fiscal_year", "")).strip()
     fiscal_year = re.sub(r"^FY", "", fiscal_year, flags=re.IGNORECASE)
-    bank_symbol = combo.get("bank_symbol") or combo.get("bank") or combo.get("ticker") or ""
+    bank_symbol = (
+        combo.get("bank_symbol") or combo.get("bank") or combo.get("ticker") or ""
+    )
     return {
         "bank_symbol": normalize_rts_bank_symbol(bank_symbol),
         "fiscal_year": fiscal_year,
@@ -1535,13 +1593,17 @@ def soften_hyde_answer(text_value: str) -> str:
     return MULTISPACE_RE.sub(" ", softened).strip()
 
 
-def apply_min_keep_floor(candidates: List[Dict[str, Any]], remove_set: set[int]) -> set[int]:
+def apply_min_keep_floor(
+    candidates: List[Dict[str, Any]], remove_set: set[int]
+) -> set[int]:
     """Restore best-scoring removals if rerank would keep too few chunks."""
     min_keep = min(RERANK_MIN_KEEP, len(candidates))
     would_keep = len(candidates) - len(remove_set)
     if would_keep >= min_keep:
         return remove_set
-    scored_removals = sorted(remove_set, key=lambda index: candidates[index].get("score", 0.0))
+    scored_removals = sorted(
+        remove_set, key=lambda index: candidates[index].get("score", 0.0)
+    )
     restore_count = min_keep - would_keep
     restored = set(scored_removals[-restore_count:])
     return remove_set - restored
@@ -1568,7 +1630,9 @@ def normalize_remove_indices(raw_indices: Any, candidate_count: int) -> set[int]
     return valid_indices
 
 
-def queries_are_repeats(previous_queries: List[str], current_queries: List[str]) -> bool:
+def queries_are_repeats(
+    previous_queries: List[str], current_queries: List[str]
+) -> bool:
     """Check whether follow-up queries repeat prior search requests."""
     if not previous_queries or not current_queries:
         return False
@@ -1588,7 +1652,11 @@ def normalize_research_table(raw_table: Any) -> Optional[Dict[str, Any]]:
     """Validate and normalize optional table payloads from research prompts."""
     if not isinstance(raw_table, dict):
         return None
-    columns = [str(column).strip() for column in raw_table.get("columns", []) if str(column).strip()]
+    columns = [
+        str(column).strip()
+        for column in raw_table.get("columns", [])
+        if str(column).strip()
+    ]
     raw_rows = raw_table.get("rows") or []
     rows = []
     if isinstance(raw_rows, list):
@@ -1630,7 +1698,10 @@ def parse_research_findings(
             raise ValueError("finding text is required")
         if not isinstance(item.get("page"), (int, float)):
             raise ValueError("finding page is required")
-        if not isinstance(item.get("location_detail"), str) or not item["location_detail"].strip():
+        if (
+            not isinstance(item.get("location_detail"), str)
+            or not item["location_detail"].strip()
+        ):
             raise ValueError("finding location_detail is required")
         finding = {
             "finding": item["finding"].strip(),
@@ -1750,7 +1821,9 @@ def build_source_reference(ref_id: str, chunk: Dict[str, Any]) -> Dict[str, Any]
     }
 
 
-def format_s3_link_marker(action: str, file_type: str, s3_key: str, display_text: str) -> str:
+def format_s3_link_marker(
+    action: str, file_type: str, s3_key: str, display_text: str
+) -> str:
     """Return an Aegis S3 marker consumed by main.process_s3_links."""
     safe_key = str(s3_key).replace(":", "")
     safe_text = str(display_text).replace("}", "").strip() or "Source"
@@ -1862,7 +1935,8 @@ def format_previous_research(iterations: List[Dict[str, Any]]) -> str:
         )
         for finding in iteration.get("findings", []):
             lines.append(
-                f"- {finding['finding']} " f"(Page {finding['page']}, {finding['location_detail']})"
+                f"- {finding['finding']} "
+                f"(Page {finding['page']}, {finding['location_detail']})"
             )
         lines.append("")
     lines.append("</previous_research>")
@@ -1875,13 +1949,17 @@ def format_retrieval_response(results: Dict[str, Any]) -> str:
 
     for combo_result in results["combo_results"]:
         combo = combo_result["combo"]
-        lines.extend([f"### {combo_bank_label(combo)} / {combo_period_label(combo)}", ""])
+        lines.extend(
+            [f"### {combo_bank_label(combo)} / {combo_period_label(combo)}", ""]
+        )
         findings = combo_result.get("findings", [])
         if findings:
             for finding in findings:
                 metric_text = format_metric_fields(finding)
                 source_text = format_finding_references(finding)
-                lines.append(f"- {finding['finding']} " f"{metric_text}\n  Source: {source_text}")
+                lines.append(
+                    f"- {finding['finding']} " f"{metric_text}\n  Source: {source_text}"
+                )
         elif combo_result.get("metrics", {}).get("skipped") == "no_search_candidates":
             lines.append("- No RTS content was found for this bank/period.")
         else:

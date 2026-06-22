@@ -1,0 +1,52 @@
+table,section,field,type,required,key_type,linked_with,ui_runtime_usage,source,status,notes
+chat_conversations,Identity & Relationship Keys,conversation_id,uuid,Yes,PK,chat_messages.conversation_id; artifacts.conversation_id,Chat conversation lookup,Validated,Required,Stable chat conversation id.
+chat_conversations,Identity & Relationship Keys,user_id,uuid,Yes,FK,auth.users.id,Conversation ownership,Validated,Required,Current authenticated user id. v1 process_monitor_logs stores user_id as varchar so runtime code should cast or store the string copy there.
+chat_conversations,UI Labels & Descriptors,conversation_title,text,No,,,Conversation list and chat header,Validated,Optional,Renamed from title.
+chat_conversations,State & Audit,created_at,timestamptz,Yes,,,Conversation ordering,Validated,Required,Conversation creation time.
+chat_conversations,State & Audit,updated_at,timestamptz,Yes,,,Conversation ordering and sync,Validated,Required,Conversation last activity time.
+chat_messages,Identity & Relationship Keys,message_id,uuid,Yes,PK,,Chat message rendering,Validated,Required,Stable chat message id.
+chat_messages,Identity & Relationship Keys,conversation_id,uuid,Yes,FK,chat_conversations.conversation_id,Chat history load,Validated,Required,Parent conversation.
+chat_messages,Identity & Relationship Keys,run_uuid,uuid,No,Indexed link,process_monitor_logs.run_uuid,Process monitor linkage,V1 process monitor link,Optional,Links assistant output to the v1 process monitor run_uuid that produced it.
+chat_messages,Query & Conversation Runtime,role,text,Yes,,,Chat transcript rendering,Validated,Required,User assistant tool or system role.
+chat_messages,Query & Conversation Runtime,content,text,Yes,,,Chat transcript rendering,Validated,Required,Message body or streamed final text.
+chat_messages,State & Audit,created_at,timestamptz,Yes,,,Message ordering,Validated,Required,Message creation time.
+artifacts,Identity & Relationship Keys,artifact_id,uuid,Yes,PK,,Artifacts strip and viewer,Validated,Required,Stable generated artifact id.
+artifacts,Identity & Relationship Keys,conversation_id,uuid,Yes,FK,chat_conversations.conversation_id,Artifacts strip query by conversation,Validated,Required,Conversation that generated the artifact.
+artifacts,Identity & Relationship Keys,run_uuid,uuid,No,Indexed link,process_monitor_logs.run_uuid,Artifact lineage,V1 process monitor link,Optional,Links artifact generation to the v1 process monitor run_uuid.
+artifacts,UI Labels & Descriptors,artifact_title,text,Yes,,,Artifact tile title,Validated,Required,Renamed from title.
+artifacts,Generated Outputs & Viewer Artifacts,artifact_type,text,Yes,,,Artifact tile type and icon,Validated,Required,Values like quick_search deep_search or report.
+artifacts,Generated Outputs & Viewer Artifacts,artifact_content,text,Yes,,,Viewer HTML preview,Validated,Required,Renamed from html_content. Stores rendered HTML research output or report body.
+artifacts,Generated Outputs & Viewer Artifacts,artifact_references,jsonb,No,FK,source_retrieval_data.file_id/chunk_id; source_retrieval_embeddings.embedding_id,Viewer citations,Validated,Optional,Renamed from source_refs. Retrieval rows referenced by the artifact.
+artifacts,State & Audit,created_at,timestamptz,Yes,,,Artifact strip newest-first sort,Validated,Required,Creation time displayed as date and time on tile.
+artifacts,State & Audit,updated_at,timestamptz,Yes,,,Artifact refresh and audit,Validated,Required,Last artifact update time.
+process_monitor_logs,Identity & Relationship Keys,log_id,bigint,Yes,PK,,Process log row id,V1 process_monitor_logs,Required,V1 primary key backed by process_monitor_logs_log_id_seq.
+process_monitor_logs,Identity & Relationship Keys,run_uuid,uuid,Yes,Indexed,chat_messages.run_uuid; artifacts.run_uuid,Process run grouping,V1 process_monitor_logs,Required,V1 indexed run identifier. One run_uuid can have many stage log rows.
+process_monitor_logs,Identity & Relationship Keys,user_id,varchar(255),No,,chat_conversations.user_id,Process log ownership,V1 process_monitor_logs,Optional,V1 nullable user id. Kept as v1 varchar; chat_conversations.user_id is uuid in the v2 runtime schema.
+process_monitor_logs,Process Monitor & Agent State,model_name,varchar(100),Yes,Indexed,,Process monitor filtering,V1 process_monitor_logs,Required,V1 indexed model name.
+process_monitor_logs,Process Monitor & Agent State,stage_name,varchar(100),Yes,Indexed,,Process monitor stage display,V1 process_monitor_logs,Required,V1 indexed stage name.
+process_monitor_logs,Process Monitor & Agent State,stage_start_time,timestamptz,Yes,Indexed,,Process monitor timeline,V1 process_monitor_logs,Required,V1 indexed stage start timestamp.
+process_monitor_logs,Process Monitor & Agent State,stage_end_time,timestamptz,No,,,Process monitor timeline,V1 process_monitor_logs,Optional,V1 nullable stage end timestamp.
+process_monitor_logs,Process Monitor & Agent State,duration_ms,integer,No,,,Process monitor duration,V1 process_monitor_logs,Optional,V1 nullable stage duration in milliseconds.
+process_monitor_logs,Process Monitor & Agent State,llm_calls,jsonb,No,,,Process monitor LLM usage detail,V1 process_monitor_logs,Optional,V1 nullable structured LLM call detail.
+process_monitor_logs,Process Monitor & Agent State,total_tokens,integer,No,,,Process monitor token usage,V1 process_monitor_logs,Optional,V1 nullable total token count.
+process_monitor_logs,Process Monitor & Agent State,total_cost,"numeric(12,6)",No,,,Process monitor cost usage,V1 process_monitor_logs,Optional,V1 nullable total cost.
+process_monitor_logs,Process Monitor & Agent State,status,varchar(255),No,Indexed,,Process monitor status display,V1 process_monitor_logs,Optional,V1 indexed nullable status.
+process_monitor_logs,Process Monitor & Agent State,decision_details,text,No,,,Process monitor decision detail,V1 process_monitor_logs,Optional,V1 nullable detail text.
+process_monitor_logs,Process Monitor & Agent State,error_message,text,No,,,Process monitor error display,V1 process_monitor_logs,Optional,V1 nullable error text.
+process_monitor_logs,Process Monitor & Agent State,environment,varchar(50),No,Indexed,,Process monitor environment filtering,V1 process_monitor_logs,Optional,V1 indexed nullable environment.
+process_monitor_logs,Process Monitor & Agent State,custom_metadata,jsonb,No,,,Process monitor structured metadata,V1 process_monitor_logs,Optional,V1 nullable custom metadata.
+process_monitor_logs,Process Monitor & Agent State,notes,text,No,,,Process monitor notes,V1 process_monitor_logs,Optional,V1 nullable notes.
+process_monitor_logs,State & Audit,log_timestamp,timestamptz,No,,,Process log ordering,V1 process_monitor_logs,Optional,V1 defaults to CURRENT_TIMESTAMP.
+prompts,Identity & Relationship Keys,id,integer,Yes,PK,,Prompt inventory,V1 prompts table,Required,V1 primary key backed by prompts_id_seq.
+prompts,Prompt & Tool Configuration,model,text,Yes,Unique composite,,Prompt lookup and routing,V1 prompts table,Required,Part of unique key with layer name and version.
+prompts,Prompt & Tool Configuration,layer,text,Yes,Unique composite,,Prompt lookup and grouping,V1 prompts table,Required,Part of unique key with model name and version.
+prompts,Prompt & Tool Configuration,name,text,Yes,Unique composite,,Prompt lookup,V1 prompts table,Required,Part of unique key with model layer and version.
+prompts,Prompt & Tool Configuration,description,text,No,,,Prompt inventory,V1 prompts table,Optional,Optional prompt description.
+prompts,Prompt & Tool Configuration,comments,text,No,,,Prompt inventory,V1 prompts table,Optional,Optional prompt comments.
+prompts,Prompt & Tool Configuration,system_prompt,text,No,,,Prompt execution,V1 prompts table,Optional,System prompt body.
+prompts,Prompt & Tool Configuration,user_prompt,text,No,,,Prompt execution,V1 prompts table,Optional,User prompt body.
+prompts,Prompt & Tool Configuration,tool_definition,jsonb,No,,,Tool calling configuration,V1 prompts table,Optional,Optional JSON tool definition.
+prompts,Prompt & Tool Configuration,uses_global,text[],No,,,Prompt composition,V1 prompts table,Optional,Global prompt names composed into this prompt.
+prompts,Prompt & Tool Configuration,version,text,Yes,Unique composite,,Prompt versioning,V1 prompts table,Required,Defaults to 1.0.0 in v1. Part of unique key with model layer and name.
+prompts,State & Audit,created_at,timestamp,No,,,Prompt inventory ordering,V1 prompts table,Optional,V1 defaults to CURRENT_TIMESTAMP.
+prompts,State & Audit,updated_at,timestamp,No,,,Prompt audit,V1 prompts table,Optional,V1 defaults to CURRENT_TIMESTAMP.

@@ -1,0 +1,15 @@
+table,section,field,type,required,key_type,linked_with,ui_runtime_usage,source,status,notes
+data_source_registry,Identity & Relationship Keys,data_source_name,text,Yes,PK,availability.data_source_list; source_retrieval_data.data_source_name; source_retrieval_embeddings.data_source_name,Filters drawer labels and source contracts,Validated,Required,Natural primary key for the source registry such as investor_slides.
+data_source_registry,UI Labels & Descriptors,data_source_display_name,text,Yes,,,Filters drawer display,Validated,Required,Human-readable source label.
+data_source_registry,UI Labels & Descriptors,data_source_description,text,Yes,,,Filters drawer descriptions,Validated,Required,Explains source coverage and intended use.
+data_source_registry,State & Audit,updated_at,timestamptz,Yes,,,Admin and audit views,Validated,Required,Only audit field needed for catalog tables.
+monitored_institutions,Identity & Relationship Keys,bank_ticker,text,Yes,PK,availability.bank_ticker; source_retrieval_data.bank_ticker; source_retrieval_embeddings.bank_ticker,Optional context bank selector,Validated,Required,Natural primary key for monitored banks. Tickers are expected to be unique.
+monitored_institutions,UI Labels & Descriptors,bank_name,text,Yes,Unique,,Optional context and API contracts,Validated,Required,Short stable bank name such as rbc td or cibc.
+monitored_institutions,UI Labels & Descriptors,bank_display_name,text,Yes,,,Optional context bank selector,Validated,Required,Full bank name shown in the UI.
+monitored_institutions,UI Labels & Descriptors,bank_category,text,Yes,,,Optional context category selector,Validated,Required,Bank grouping such as Canadian bank or US bank.
+monitored_institutions,State & Audit,updated_at,timestamptz,Yes,,,Admin and audit views,Validated,Required,Only audit field needed for catalog tables.
+data_source_availability,Identity & Relationship Keys,bank_ticker,text,Yes,Composite PK; FK,monitored_institutions.bank_ticker,Optional context bank selector,Validated,Required,Part of composite primary key with fiscal_year and quarter.
+data_source_availability,Period & Availability,fiscal_year,integer,Yes,Composite PK,,Optional context fiscal year selector,Validated,Required,Part of composite primary key with bank_ticker and quarter.
+data_source_availability,Period & Availability,quarter,text,Yes,Composite PK,,Optional context quarter selector,Validated,Required,Part of composite primary key with bank_ticker and fiscal_year.
+data_source_availability,Period & Availability,data_source_list,text[],Yes,FK list,data_source_registry.data_source_name,Optional context source availability,Validated,Required,Array of data_source_name values available for the bank fiscal year and quarter.
+data_source_availability,State & Audit,updated_at,timestamptz,Yes,,,Admin and audit views,Validated,Required,Only audit field needed for catalog tables.

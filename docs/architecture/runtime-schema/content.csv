@@ -1,0 +1,44 @@
+table,section,field,type,required,key_type,linked_with,ui_runtime_usage,source,status,notes
+source_retrieval_data,Identity & Relationship Keys,data_source_name,text,Yes,FK,data_source_registry.data_source_name,Source routing and filters,V1 shared schema,Required,Standardized from v1 source_type. Each data source has a physical data table using this shared schema.
+source_retrieval_data,Identity & Relationship Keys,file_id,text,Yes,Composite PK; FK,source_retrieval_embeddings.file_id,Viewer source links and retrieval joins,V1 shared schema,Required,Part of v1 primary key with chunk_id.
+source_retrieval_data,Identity & Relationship Keys,chunk_id,text,Yes,Composite PK,source_retrieval_embeddings.content_unit_ids,Retrieval candidate id and citation anchor,V1 shared schema,Required,Part of v1 primary key with file_id.
+source_retrieval_data,Period & Availability,fiscal_year,text,Yes,,source_retrieval_embeddings.fiscal_year,Optional context and retrieval filter,V1 shared schema,Required,V1 stores fiscal_year as text.
+source_retrieval_data,Period & Availability,quarter,text,Yes,,source_retrieval_embeddings.quarter,Optional context and retrieval filter,V1 shared schema,Required,V1 stores quarter as text.
+source_retrieval_data,Period & Availability,bank_ticker,text,Yes,FK,monitored_institutions.bank_ticker; source_retrieval_embeddings.bank_ticker,Optional context and retrieval filter,V1 shared schema,Required,Standardized from v1 bank.
+source_retrieval_data,Storage & Content,file_name,text,Yes,,,Viewer citation title,V1 shared schema,Required,Standardized from v1 filename.
+source_retrieval_data,Storage & Content,file_type,text,Yes,,,Viewer citation and parser routing,V1 shared schema,Required,Source file type such as pdf xlsx or xml.
+source_retrieval_data,Storage & Content,file_path,text,Yes,,,Source file location,V1 shared schema,Required,Path to source file in the configured document store.
+source_retrieval_data,Storage & Content,file_hash,text,Yes,,source_retrieval_embeddings.file_hash,Ingest integrity and dedupe,V1 shared schema,Required,Hash of the source file.
+source_retrieval_data,Storage & Content,page_number,integer,No,,,Viewer page jump,V1 shared schema,Optional,Nullable because not every source is page-based.
+source_retrieval_data,Storage & Content,name,text,No,,,Retrieval title or row label,V1 shared schema,Optional,V1 field for content-unit name.
+source_retrieval_data,Storage & Content,summary,text,No,,,Retrieval preview and full-text ranking,V1 shared schema,Optional,V1 field for content-unit summary.
+source_retrieval_data,Storage & Content,chunk_content,text,No,,,Retrieval body and citation preview,V1 shared schema,Optional,V1 field for extracted chunk text.
+source_retrieval_data,Storage & Content,keywords,jsonb,Yes,,,Keyword search and enrichment,V1 shared schema,Required,V1 default is empty JSON array.
+source_retrieval_data,Storage & Content,metrics,jsonb,Yes,,,Metric search and enrichment,V1 shared schema,Required,V1 default is empty JSON array.
+source_retrieval_data,Storage & Content,keyword_embedding,vector(3072),No,,,Keyword vector retrieval,V1 shared schema,Optional,V1 optional vector column on the data table.
+source_retrieval_data,Storage & Content,metric_embedding,vector(3072),No,,,Metric vector retrieval,V1 shared schema,Optional,V1 optional vector column on the data table.
+source_retrieval_data,Storage & Content,summary_embedding,vector(3072),No,,,Summary vector retrieval,V1 shared schema,Optional,V1 optional vector column on the data table.
+source_retrieval_data,Storage & Content,chunk_embedding,vector(3072),No,,,Chunk vector retrieval,V1 shared schema,Optional,V1 optional vector column on the data table.
+source_retrieval_data,State & Audit,created_at,timestamptz,No,,,Ingest lineage,V1 shared schema,Optional,V1 data table column is nullable.
+source_retrieval_embeddings,Identity & Relationship Keys,embedding_id,text,Yes,PK,,Embedding row id,V1 shared schema,Required,Primary key for long-form embedding rows.
+source_retrieval_embeddings,Identity & Relationship Keys,data_source_name,text,Yes,FK,data_source_registry.data_source_name,Source routing and filters,V1 shared schema,Required,Standardized from v1 source_type.
+source_retrieval_embeddings,Identity & Relationship Keys,file_id,text,Yes,FK,source_retrieval_data.file_id,Retrieval data join,V1 shared schema,Required,Joins embedding rows back to data rows.
+source_retrieval_embeddings,Identity & Relationship Keys,content_unit_id,text,No,,source_retrieval_data.chunk_id,Single content-unit pointer,V1 shared schema,Optional,Nullable because document and section summary embeddings can cover multiple units.
+source_retrieval_embeddings,Identity & Relationship Keys,content_unit_ids,jsonb,Yes,FK list,source_retrieval_data.chunk_id,Multi-content-unit join,V1 shared schema,Required,JSON array used in v1 lateral join to source_retrieval_data.chunk_id.
+source_retrieval_embeddings,Identity & Relationship Keys,chunk_id,text,No,,source_retrieval_data.chunk_id,Optional direct chunk pointer,V1 shared schema,Optional,V1 carries this when the embedding maps to a single chunk.
+source_retrieval_embeddings,Identity & Relationship Keys,section_id,text,No,,,Section-level embedding pointer,V1 shared schema,Optional,Used for section_summary embeddings.
+source_retrieval_embeddings,Period & Availability,fiscal_year,text,Yes,,source_retrieval_data.fiscal_year,Optional context and retrieval filter,V1 shared schema,Required,V1 stores fiscal_year as text.
+source_retrieval_embeddings,Period & Availability,quarter,text,Yes,,source_retrieval_data.quarter,Optional context and retrieval filter,V1 shared schema,Required,V1 stores quarter as text.
+source_retrieval_embeddings,Period & Availability,bank_ticker,text,Yes,FK,monitored_institutions.bank_ticker; source_retrieval_data.bank_ticker,Optional context and retrieval filter,V1 shared schema,Required,Standardized from v1 bank.
+source_retrieval_embeddings,Storage & Content,file_name,text,Yes,,,Viewer citation title,V1 shared schema,Required,Standardized from v1 filename.
+source_retrieval_embeddings,Storage & Content,file_type,text,Yes,,,Viewer citation and parser routing,V1 shared schema,Required,Source file type such as pdf xlsx or xml.
+source_retrieval_embeddings,Storage & Content,file_path,text,Yes,,,Source file location,V1 shared schema,Required,Path to source file in the configured document store.
+source_retrieval_embeddings,Storage & Content,file_hash,text,Yes,,source_retrieval_data.file_hash,Ingest integrity and dedupe,V1 shared schema,Required,Hash of the source file.
+source_retrieval_embeddings,Storage & Content,embedding_type,text,Yes,,,Retrieval strategy and ranking,V1 shared schema,Required,V1 values include content keyword metric section_summary and document_summary.
+source_retrieval_embeddings,Storage & Content,embedding_scope,text,Yes,,,Retrieval scope,V1 shared schema,Required,V1 values include content_unit section and document.
+source_retrieval_embeddings,Storage & Content,embedding_text,text,Yes,,,Vector input text and debug preview,V1 shared schema,Required,Text used to produce the embedding vector.
+source_retrieval_embeddings,Storage & Content,text_hash,text,No,,,Embedding dedupe and cache key,V1 shared schema,Optional,Hash of embedding_text.
+source_retrieval_embeddings,Storage & Content,embedding,vector(3072),No,,,Semantic retrieval,V1 shared schema,Optional,V1 DDL allows null but retrieval requires non-null vectors for searchable rows.
+source_retrieval_embeddings,Storage & Content,embedding_model,text,Yes,,,Embedding provenance,V1 shared schema,Required,Model used to produce embedding.
+source_retrieval_embeddings,Storage & Content,embedding_dimensions,integer,Yes,,,Embedding validation,V1 shared schema,Required,V1 default dimension is 3072.
+source_retrieval_embeddings,State & Audit,created_at,timestamptz,Yes,,,Ingest lineage,V1 shared schema,Required,V1 embeddings table requires created_at.

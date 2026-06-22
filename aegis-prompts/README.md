@@ -1,7 +1,15 @@
-# Aegis Prompts
+# Aegis V2 Prompts
 
-Canonical YAML archive for Aegis prompt rows. Runtime code loads prompts from `public.prompts`; this folder is the repo copy used to review and seed that table.
+This folder is the clean prompt workspace for the Aegis V2 agent.
 
-Each prompt YAML maps to one `public.prompts` row by `model`, `layer`, `name`, and `version`. The `_archive` block records whether this copy came from the latest Postgres export or from the current local YAML during the fallback-removal migration.
+The V1 prompt archive is preserved at:
 
-Use `python scripts/push_aegis_prompts.py` to upsert these files into Postgres.
+- `archive/v1/aegis-prompts/`
+
+Runtime prompt rows still use the V1-compatible `public.prompts` table shape. New V2 prompt files should be added here before being pushed into Postgres.
+
+## Layout
+
+- `global/`: shared project, database, citation, and policy instructions.
+- `agent/`: orchestration, routing, planning, and response prompts.
+- `tools/`: prompt files owned by individual tools or widget contracts.

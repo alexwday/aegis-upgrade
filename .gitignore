@@ -27,6 +27,8 @@ aegis-pipeline/tokenizer-cache/*
 !aegis-pipeline/tokenizer-cache/9b5ad71b2ce5302211f9c61530b329a4922fc6a4
 !aegis-pipeline/tokenizer-cache/fb374d419588a4632f3f557e76b4b70aebbca790
 aegis-agent/logs/
+node_modules/
+**/node_modules/
 
 # Local editor/app state.
 .idea/
