@@ -153,16 +153,17 @@ async def test_context_follow_up_routes_to_general_without_research(
 async def test_greeting_routes_to_plain_general_chat(monkeypatch) -> None:
     """Simple greetings should behave like chat, not research output."""
 
-    async def fake_stream_synthesis(_turn, **_kwargs):
-        yield "Hi. What would you like to work on?"
+    async def fail_plan_turn(*_args, **_kwargs):
+        raise AssertionError("greeting should not need LLM planning")
 
-    async def fake_plan_turn(_turn, _conversation_context, _llm_context=None):
-        return TurnPlan(action="conversation", rationale="greeting")
+    async def fail_stream_synthesis(*_args, **_kwargs):
+        raise AssertionError("greeting should not need LLM synthesis")
+        if False:
+            yield ""
 
-    monkeypatch.setattr("aegis_agent.v2.orchestrator.plan_turn", fake_plan_turn)
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.plan_turn", fail_plan_turn)
     monkeypatch.setattr(
-        "aegis_agent.v2.orchestrator.stream_synthesis",
-        fake_stream_synthesis,
+        "aegis_agent.v2.orchestrator.stream_synthesis", fail_stream_synthesis
     )
 
     state = V2SessionState(session_id="session_test")
@@ -175,6 +176,100 @@ async def test_greeting_routes_to_plain_general_chat(monkeypatch) -> None:
     ]
     assert events[0]["payload"]["decision"] == "general_conversation"
     assert "aegis_final_shell" not in events[-1]["payload"]["content"]
+    assert "Hi. I can check data availability" in events[-1]["payload"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_capabilities_question_gets_static_chat_not_prompt_echo(monkeypatch) -> None:
+    """The help path should be useful chat, not a leaked prompt/context response."""
+
+    async def fail_plan_turn(*_args, **_kwargs):
+        raise AssertionError("capabilities help should not need LLM planning")
+
+    async def fail_stream_synthesis(*_args, **_kwargs):
+        raise AssertionError("capabilities help should not need LLM synthesis")
+        if False:
+            yield ""
+
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.plan_turn", fail_plan_turn)
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.stream_synthesis", fail_stream_synthesis
+    )
+
+    state = V2SessionState(session_id="session_test")
+    events = [event async for event in run_turn({"content": "what can you do"}, state)]
+
+    assert [event["type"] for event in events] == [
+        "tool.completed",
+        "chat.delta",
+        "chat.message",
+    ]
+    content = events[-1]["payload"]["content"]
+    assert "I can check which sources are available" in content
+    assert "Current user message" not in content
+    assert "what can you do" not in content
+
+
+@pytest.mark.asyncio
+async def test_bank_data_request_routes_to_availability_not_quick_search(monkeypatch) -> None:
+    """Asking what data exists for a bank is a coverage request, not research."""
+
+    async def fake_optional_context(filters):
+        assert filters.bank_symbols == ["RY-CA"]
+        assert filters.fiscal_years == []
+        assert filters.quarters == []
+        return DataAvailabilityResponse(
+            rows=[
+                DataAvailabilityRow(
+                    bank_id=1,
+                    bank_name="Royal Bank of Canada",
+                    bank_symbol="RY-CA",
+                    bank_category="Canadian Banks",
+                    bank_category_id="Canadian_Banks",
+                    fiscal_year=2026,
+                    quarter="Q1",
+                    source_ids=["rts", "pillar3"],
+                    last_refreshed_at=datetime(2026, 6, 1, 12, 0),
+                )
+            ],
+            fiscal_years=[2026],
+            quarters=["Q1"],
+            bank_categories=["Canadian Banks"],
+        )
+
+    async def fail_plan_turn(*_args, **_kwargs):
+        raise AssertionError("availability should not need LLM planning")
+
+    async def fail_retrieve_quick_evidence(*_args, **_kwargs):
+        raise AssertionError("availability should not run quick search")
+
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.plan_turn", fail_plan_turn)
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.optional_context", fake_optional_context
+    )
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.retrieve_quick_evidence",
+        fail_retrieve_quick_evidence,
+    )
+
+    state = V2SessionState(session_id="session_test")
+    events = [
+        event
+        async for event in run_turn(
+            {"content": "what data do you have for rbc"}, state
+        )
+    ]
+
+    assert [event["type"] for event in events] == [
+        "tool.started",
+        "widget.created",
+        "tool.completed",
+        "widget.completed",
+        "chat.message",
+    ]
+    assert events[2]["payload"]["name"] == "check_data_availability"
+    assert events[3]["payload"]["widget"]["kind"] == "data_availability"
+    assert events[3]["payload"]["widget"]["data"]["rows"][0]["bank_symbol"] == "RY-CA"
 
 
 @pytest.mark.asyncio

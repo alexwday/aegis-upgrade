@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html import escape
@@ -36,6 +37,17 @@ from .tools.runtime import load_conversation_context
 
 MAX_AGENT_STEPS = 3
 AgentStepStatus = Literal["continue", "complete", "awaiting_user", "error"]
+GREETING_RESPONSE = (
+    "Hi. I can check data availability, find source documents, and run quick "
+    "or deep source-backed research across Canadian bank disclosures."
+)
+CAPABILITIES_RESPONSE = (
+    "I can check which sources are available by bank and period, open document "
+    "previews, run quick evidence search, run deeper source-backed research, "
+    "and summarize results with citations. For research, give me a bank, fiscal "
+    "year, quarter, source set, and question. For coverage, ask something like "
+    "'what data do you have for RBC?'"
+)
 
 
 @dataclass
@@ -106,6 +118,87 @@ def _effective_plan(plan: TurnPlan, turn: NormalizedTurn) -> TurnPlan:
             ),
         )
     return plan
+
+
+def _simple_turn_text(turn: NormalizedTurn) -> str:
+    """Return normalized turn text for deterministic routing."""
+    return " ".join(turn.content.lower().split())
+
+
+def _is_greeting(turn: NormalizedTurn) -> bool:
+    """Return whether a turn is only a lightweight greeting."""
+    text = re.sub(r"[^a-z\s]", "", _simple_turn_text(turn)).strip()
+    return text in {
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+    }
+
+
+def _is_capabilities_request(turn: NormalizedTurn) -> bool:
+    """Return whether the user is asking what Aegis can do."""
+    text = _simple_turn_text(turn).strip("?.! ")
+    return text in {
+        "help",
+        "what can you do",
+        "what can you help with",
+        "what do you do",
+        "how can you help",
+        "what are you able to do",
+        "what can aegis do",
+    }
+
+
+def _is_availability_request(turn: NormalizedTurn) -> bool:
+    """Return whether the user is asking for source/data coverage, not research."""
+    text = _simple_turn_text(turn)
+    source_terms = (
+        "data",
+        "source",
+        "sources",
+        "document",
+        "documents",
+        "docs",
+        "filings",
+    )
+    if "availability" in text or "source coverage" in text or "data coverage" in text:
+        return True
+    if "what sources" in text or "which sources" in text:
+        return True
+    if "what documents" in text or "which documents" in text or "what filings" in text:
+        return True
+    if "what data" in text and (
+        "have" in text or "available" in text or "coverage" in text
+    ):
+        return True
+    if "do you have" in text and any(term in text for term in source_terms):
+        return True
+    if "available" in text and any(term in text for term in source_terms):
+        return True
+    return False
+
+
+def _deterministic_plan(turn: NormalizedTurn) -> TurnPlan | None:
+    """Route obvious UI/coverage/chat turns before asking the LLM planner."""
+    if _is_greeting(turn):
+        return TurnPlan(action="conversation", rationale="deterministic_greeting")
+    if _is_capabilities_request(turn):
+        return TurnPlan(action="conversation", rationale="deterministic_capabilities")
+    if _is_availability_request(turn):
+        return TurnPlan(action="availability", rationale="deterministic_availability")
+    return None
+
+
+def _deterministic_general_response(turn: NormalizedTurn) -> str | None:
+    """Return local responses for simple general turns that should not hit the LLM."""
+    if _is_greeting(turn):
+        return GREETING_RESPONSE
+    if _is_capabilities_request(turn):
+        return CAPABILITIES_RESPONSE
+    return None
 
 
 def _availability_filters_from_turn(turn: NormalizedTurn) -> AvailabilityFilters:
@@ -338,6 +431,30 @@ async def _run_general_turn(
             "model_plan": turn.model_plan.__dict__ if turn.model_plan else {},
         },
     )
+    deterministic_response = _deterministic_general_response(turn)
+    if deterministic_response is not None:
+        stream_id = turn.run_uuid or f"stream_{uuid4().hex}"
+        yield event(
+            state.session_id,
+            "chat.delta",
+            {
+                "stream_id": stream_id,
+                "role": "assistant",
+                "content": deterministic_response,
+            },
+        )
+        yield event(
+            state.session_id,
+            "chat.message",
+            _message_payload(
+                "assistant",
+                deterministic_response,
+                stream_id=stream_id,
+                final=True,
+            ),
+        )
+        return
+
     try:
         async for item in _stream_plain_response(state, turn):
             yield item
@@ -701,27 +818,6 @@ async def run_turn(
         )
         return
 
-    try:
-        state.llm_context = await build_llm_context(
-            turn.run_uuid or "v2-agent", "turn execution"
-        )
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        yield event(
-            state.session_id,
-            "tool.failed",
-            {
-                "tool_id": f"tool_{uuid4().hex}",
-                "name": "setup_llm_context",
-                "error": str(exc),
-            },
-        )
-        yield event(
-            state.session_id,
-            "chat.message",
-            _message_payload("assistant", f"Aegis could not set up LLM access: {exc}"),
-        )
-        return
-
     async for item in _run_agent_loop(state, turn):
         yield item
 
@@ -731,28 +827,56 @@ async def _run_agent_loop(
 ) -> AsyncIterator[dict[str, Any]]:
     """Run bounded V2 planning and action steps for one user turn."""
     for step_index in range(MAX_AGENT_STEPS):
-        try:
-            plan = await plan_turn(turn, state.conversation_context, state.llm_context)
-            plan = _effective_plan(plan, turn)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            yield event(
-                state.session_id,
-                "tool.failed",
-                {
-                    "tool_id": f"tool_{uuid4().hex}",
-                    "name": "plan_turn",
-                    "error": str(exc),
-                    "agent_step": step_index,
-                },
-            )
-            yield event(
-                state.session_id,
-                "chat.message",
-                _message_payload(
-                    "assistant", f"Aegis could not plan the next step: {exc}"
-                ),
-            )
-            return
+        plan = _deterministic_plan(turn)
+        if plan is None:
+            if state.llm_context is None:
+                try:
+                    state.llm_context = await build_llm_context(
+                        turn.run_uuid or "v2-agent", "turn execution"
+                    )
+                except Exception as exc:  # pylint: disable=broad-exception-caught
+                    yield event(
+                        state.session_id,
+                        "tool.failed",
+                        {
+                            "tool_id": f"tool_{uuid4().hex}",
+                            "name": "setup_llm_context",
+                            "error": str(exc),
+                            "agent_step": step_index,
+                        },
+                    )
+                    yield event(
+                        state.session_id,
+                        "chat.message",
+                        _message_payload(
+                            "assistant", f"Aegis could not set up LLM access: {exc}"
+                        ),
+                    )
+                    return
+            try:
+                plan = await plan_turn(
+                    turn, state.conversation_context, state.llm_context
+                )
+                plan = _effective_plan(plan, turn)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                yield event(
+                    state.session_id,
+                    "tool.failed",
+                    {
+                        "tool_id": f"tool_{uuid4().hex}",
+                        "name": "plan_turn",
+                        "error": str(exc),
+                        "agent_step": step_index,
+                    },
+                )
+                yield event(
+                    state.session_id,
+                    "chat.message",
+                    _message_payload(
+                        "assistant", f"Aegis could not plan the next step: {exc}"
+                    ),
+                )
+                return
 
         outcome = AgentStepOutcome()
         async for item in _run_planned_action(
