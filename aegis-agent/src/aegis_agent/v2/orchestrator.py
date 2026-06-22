@@ -17,6 +17,7 @@ from .agent.final_response import (
     stream_synthesis,
 )
 from .agent.models import EvidenceChunk, NormalizedTurn, normalize_turn
+from .agent.planner import ClarificationOption, plan_turn
 from .agent.retrieval import QUICK_SEARCH_CHUNK_LIMIT, retrieve_quick_evidence
 from .schemas import (
     Artifact,
@@ -64,69 +65,16 @@ def _message_payload(role: str, content: str, **extra: Any) -> dict[str, Any]:
     return payload
 
 
-def _is_availability_request(message: str) -> bool:
-    """Return whether a user message should run the availability tool."""
-    normalized = message.lower()
-    triggers = (
-        "available",
-        "availability",
-        "coverage",
-        "data do we have",
-        "what data",
-        "which data",
-    )
-    return any(trigger in normalized for trigger in triggers)
-
-
-def _is_general_request(message: str) -> bool:
-    """Return whether the turn can be answered without source retrieval."""
-    normalized = message.lower().strip()
-    triggers = (
-        "what can you do",
-        "how do you work",
-        "what is aegis",
-        "help",
-        "hello",
-        "hi",
-    )
-    return any(trigger in normalized for trigger in triggers)
-
-
-def _is_context_follow_up(
-    message: str, conversation_context: ConversationContext
-) -> bool:
-    """Return whether the turn is asking about prior conversation state."""
-    if not conversation_context.has_context:
-        return False
-    normalized = message.lower().strip()
-    exact_triggers = {
-        "summarize that",
-        "summarise that",
-        "explain that",
-        "expand on that",
-        "what about that",
-        "tell me more about that",
-    }
-    if normalized in exact_triggers:
-        return True
-    phrase_triggers = (
-        "previous answer",
-        "previous response",
-        "prior answer",
-        "prior response",
-        "last answer",
-        "last response",
-        "last artifact",
-        "latest artifact",
-        "previous artifact",
-        "prior artifact",
-        "that artifact",
-        "the artifact",
-        "earlier",
-        "above",
-        "recap",
-    )
-    return any(trigger in normalized for trigger in phrase_triggers)
+def _missing_research_scope(turn: NormalizedTurn) -> list[str]:
+    """Return scope fields needed before running source-backed research."""
+    missing: list[str] = []
+    if not turn.bank_symbols:
+        missing.append("bank")
+    if not turn.fiscal_years:
+        missing.append("fiscal_year")
+    if not turn.quarters:
+        missing.append("quarter")
+    return missing
 
 
 def _availability_filters_from_turn(turn: NormalizedTurn) -> AvailabilityFilters:
@@ -314,6 +262,35 @@ async def _stream_final_response(
     )
 
 
+async def _stream_plain_response(
+    state: V2SessionState,
+    turn: NormalizedTurn,
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream one normal assistant message without a research response shell."""
+    stream_id = turn.run_uuid or f"stream_{uuid4().hex}"
+    body_parts: list[str] = []
+    async for delta in stream_synthesis(
+        turn,
+        mode="general",
+        conversation_context=state.conversation_context,
+    ):
+        if not delta:
+            continue
+        body_parts.append(delta)
+        yield event(
+            state.session_id,
+            "chat.delta",
+            {"stream_id": stream_id, "role": "assistant", "content": delta},
+        )
+    yield event(
+        state.session_id,
+        "chat.message",
+        _message_payload(
+            "assistant", "".join(body_parts).strip(), stream_id=stream_id, final=True
+        ),
+    )
+
+
 async def _run_general_turn(
     state: V2SessionState, turn: NormalizedTurn
 ) -> AsyncIterator[dict[str, Any]]:
@@ -328,8 +305,157 @@ async def _run_general_turn(
             "model_plan": turn.model_plan.__dict__ if turn.model_plan else {},
         },
     )
-    async for item in _stream_final_response(state, turn, mode="general"):
-        yield item
+    try:
+        async for item in _stream_plain_response(state, turn):
+            yield item
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        yield event(
+            state.session_id,
+            "tool.failed",
+            {
+                "tool_id": f"tool_{uuid4().hex}",
+                "name": "conversation",
+                "error": str(exc),
+            },
+        )
+        yield event(
+            state.session_id,
+            "chat.message",
+            _message_payload(
+                "assistant", f"Aegis could not generate a response: {exc}"
+            ),
+        )
+
+
+def _clarification_question(missing: list[str]) -> str:
+    """Return a concise clarification question for missing research scope."""
+    if missing == ["bank"]:
+        return "Which bank should I use for this research?"
+    if missing == ["fiscal_year"]:
+        return "Which fiscal year should I use for this research?"
+    if missing == ["quarter"]:
+        return "Which quarter should I use for this research?"
+    if missing == ["fiscal_year", "quarter"]:
+        return "Which fiscal period should I use for this research?"
+    if missing == ["bank", "fiscal_year", "quarter"]:
+        return "Which bank and fiscal period should I use for this research?"
+    return f"Please clarify the missing research scope: {', '.join(missing)}."
+
+
+def _clarification_widget_html(question: str, missing: list[str]) -> str:
+    """Return trusted HTML for a clarification widget."""
+    missing_items = "".join(f"<li>{escape(item)}</li>" for item in missing)
+    return (
+        '<section class="clarification-widget">'
+        f"<p>{escape(question)}</p>"
+        "<small>Research will start after this scope is clear.</small>"
+        f"<ul>{missing_items}</ul>"
+        "</section>"
+    )
+
+
+def _clarification_actions(
+    turn: NormalizedTurn, response: DataAvailabilityResponse | None
+) -> list[WidgetAction]:
+    """Build clickable clarification choices from live availability rows."""
+    if response is None:
+        return []
+    actions: list[WidgetAction] = []
+    seen: set[tuple[str, int, str]] = set()
+    for row in response.rows:
+        key = (row.bank_symbol, row.fiscal_year, row.quarter)
+        if key in seen:
+            continue
+        seen.add(key)
+        label = f"{row.bank_symbol} {row.quarter} {row.fiscal_year}"
+        source_ids = turn.source_ids or row.source_ids
+        actions.append(
+            WidgetAction(
+                id=f"clarify_{row.bank_symbol}_{row.fiscal_year}_{row.quarter}",
+                label=label,
+                action_type="clarification_reply",
+                payload={
+                    "reply": f"Use {label}",
+                    "resend_query": turn.content,
+                    "filters": {
+                        "source_ids": source_ids,
+                        "bank_symbols": [row.bank_symbol],
+                        "fiscal_years": [row.fiscal_year],
+                        "quarters": [row.quarter],
+                    },
+                },
+            )
+        )
+        if len(actions) >= 6:
+            break
+    return actions
+
+
+def _planner_clarification_actions(
+    turn: NormalizedTurn, options: list[ClarificationOption]
+) -> list[WidgetAction]:
+    """Convert model-suggested choices into clarification widget actions."""
+    actions: list[WidgetAction] = []
+    for option in options:
+        payload = dict(option.payload)
+        payload.setdefault("reply", option.label)
+        payload.setdefault("resend_query", turn.content)
+        actions.append(
+            WidgetAction(
+                id=f"clarify_{option.id}",
+                label=option.label,
+                action_type="clarification_reply",
+                payload=payload,
+            )
+        )
+    return actions
+
+
+async def _run_clarification_turn(
+    state: V2SessionState,
+    turn: NormalizedTurn,
+    missing: list[str],
+    *,
+    question: str | None = None,
+    options: list[ClarificationOption] | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Ask the user for missing research scope before running retrieval."""
+    tool_id = f"tool_{uuid4().hex}"
+    question = question or _clarification_question(missing)
+    response: DataAvailabilityResponse | None = None
+    try:
+        response = await optional_context(_availability_filters_from_turn(turn))
+    except Exception:
+        response = None
+    actions = _planner_clarification_actions(turn, options or [])
+    if not actions:
+        actions = _clarification_actions(turn, response)
+    widget = HtmlWidget(
+        kind="clarification",
+        title="Clarification",
+        status="complete",
+        html=_clarification_widget_html(question, missing),
+        data={"missing_scope": missing, "query": turn.content},
+        actions=actions,
+    )
+    state.widgets[widget.id] = widget
+    yield event(
+        state.session_id,
+        "tool.completed",
+        {
+            "tool_id": tool_id,
+            "name": "classify_turn",
+            "decision": "needs_clarification",
+            "missing_scope": missing,
+            "message": question,
+            "model_plan": turn.model_plan.__dict__ if turn.model_plan else {},
+        },
+    )
+    yield event(
+        state.session_id,
+        "widget.completed",
+        {"widget": widget.model_dump(mode="json")},
+    )
 
 
 async def _run_quick_research_turn(
@@ -540,15 +666,54 @@ async def run_turn(
         )
         return
 
-    if _is_availability_request(turn.content):
+    try:
+        plan = await plan_turn(turn, state.conversation_context)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        yield event(
+            state.session_id,
+            "tool.failed",
+            {"tool_id": f"tool_{uuid4().hex}", "name": "plan_turn", "error": str(exc)},
+        )
+        yield event(
+            state.session_id,
+            "chat.message",
+            _message_payload("assistant", f"Aegis could not plan the next step: {exc}"),
+        )
+        return
+
+    if plan.action == "availability":
         async for item in _run_availability_turn(state, turn):
             yield item
         return
 
-    if _is_general_request(turn.content) or _is_context_follow_up(
-        turn.content, state.conversation_context
-    ):
+    if plan.action == "conversation":
         async for item in _run_general_turn(state, turn):
+            yield item
+        return
+
+    if plan.action == "clarify":
+        missing = (
+            plan.missing_scope or _missing_research_scope(turn) or ["research_question"]
+        )
+        async for item in _run_clarification_turn(
+            state,
+            turn,
+            missing,
+            question=plan.clarification_question,
+            options=plan.clarification_options,
+        ):
+            yield item
+        return
+
+    missing = _missing_research_scope(turn)
+    if missing:
+        async for item in _run_clarification_turn(
+            state,
+            turn,
+            missing,
+            question=plan.clarification_question,
+            options=plan.clarification_options,
+        ):
             yield item
         return
 

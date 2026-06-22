@@ -866,18 +866,38 @@ function App() {
   }
 
   function runWidgetAction(action: HtmlWidget["actions"][number]) {
-    if (action.action_type !== "filter_documents") return;
     const payload = action.payload as Partial<Filters>;
-    setFilters({
+    if (action.action_type === "filter_documents") {
+      setFilters({
+        ...filters,
+        source_ids: (payload.source_ids as string[]) ?? filters.source_ids,
+        bank_symbols: (payload.bank_symbols as string[]) ?? filters.bank_symbols,
+        fiscal_years: (payload.fiscal_years as number[]) ?? filters.fiscal_years,
+        quarters: (payload.quarters as string[]) ?? filters.quarters
+      });
+      return;
+    }
+    if (action.action_type !== "clarification_reply") return;
+    const clarificationPayload = action.payload as {
+      filters?: Partial<Filters>;
+      resend_query?: string;
+      reply?: string;
+    };
+    const patch = clarificationPayload.filters ?? {};
+    const nextFilters = {
       ...filters,
-      source_ids: (payload.source_ids as string[]) ?? filters.source_ids,
-      bank_symbols: (payload.bank_symbols as string[]) ?? filters.bank_symbols,
-      fiscal_years: (payload.fiscal_years as number[]) ?? filters.fiscal_years,
-      quarters: (payload.quarters as string[]) ?? filters.quarters
-    });
+      source_ids: patch.source_ids ?? filters.source_ids,
+      bank_symbols: patch.bank_symbols ?? filters.bank_symbols,
+      bank_categories: patch.bank_categories ?? filters.bank_categories,
+      fiscal_years: patch.fiscal_years ?? filters.fiscal_years,
+      quarters: patch.quarters ?? filters.quarters,
+      keyword: patch.keyword ?? filters.keyword
+    };
+    setFilters(nextFilters);
+    sendMessage(clarificationPayload.resend_query || clarificationPayload.reply || action.label, nextFilters);
   }
 
-  function sendMessage(message = input) {
+  function sendMessage(message = input, activeFilters = filters) {
     const content = message.trim();
     if (!content) return;
     const turnId = crypto.randomUUID();
@@ -900,10 +920,10 @@ function App() {
       research_depth: searchMode === "quick" ? "short" : "long"
     };
     const optionalContext = {
-      bank_categories: filters.bank_categories,
-      bank_tickers: filters.bank_symbols,
-      fiscal_years: filters.fiscal_years,
-      quarters: filters.quarters
+      bank_categories: activeFilters.bank_categories,
+      bank_tickers: activeFilters.bank_symbols,
+      fiscal_years: activeFilters.fiscal_years,
+      quarters: activeFilters.quarters
     };
     const payload = JSON.stringify({
       type: "message",
@@ -911,11 +931,11 @@ function App() {
       content,
       user_id: runtimeUserId,
       conversation_id: activeConversationId,
-      filters,
+      filters: activeFilters,
       optional_context: optionalContext,
       model_selection: modelMode,
       search_selection: searchMode,
-      context: { ...buildQueryContext(filters), ...preferences },
+      context: { ...buildQueryContext(activeFilters), ...preferences },
       preferences
     });
     window.setTimeout(() => {
