@@ -153,6 +153,20 @@ class ChatMessageRecord(V2BaseModel):
     content: str
 
 
+class ClarificationResolutionRequest(V2BaseModel):
+    """Request to replace a persisted clarification widget with its question."""
+
+    widget_id: str
+    question: str
+
+
+class RuntimeResetResponse(V2BaseModel):
+    """Result of clearing persisted runtime chat state for one user."""
+
+    user_id: str
+    deleted_conversations: int = 0
+
+
 class ChatHistoryMessageItem(V2BaseModel):
     """One visible chat message item in a hydrated conversation transcript."""
 

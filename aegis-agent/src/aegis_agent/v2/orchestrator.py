@@ -788,12 +788,14 @@ async def _run_clarification_turn(
     actions = _agent_clarification_actions(turn, options or [])
     if not actions:
         actions = _clarification_actions(turn, response)
+    for action in actions:
+        action.payload["question"] = question
     widget = HtmlWidget(
         kind="clarification",
         title="Clarification",
         status="complete",
         html=_clarification_widget_html(question, missing),
-        data={"missing_scope": missing, "query": turn.content},
+        data={"missing_scope": missing, "query": turn.content, "question": question},
         actions=actions,
     )
     state.widgets[widget.id] = widget
@@ -1002,9 +1004,10 @@ async def run_turn(
 ) -> AsyncIterator[dict[str, Any]]:
     """Run one V2 chat turn and stream typed UI events."""
     turn = normalize_turn(payload)
+    visible_user_content = str(payload.get("content") or turn.content)
     state.conversation_context = await load_conversation_context(
         turn.conversation_id,
-        current_user_content=turn.content,
+        current_user_content=visible_user_content,
     )
     if not turn.content:
         yield event(

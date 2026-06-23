@@ -106,6 +106,14 @@ type ChatStreamItem =
   | { type: "widget"; widget: HtmlWidget }
   | { type: "thinking"; id: string; prompt: string };
 
+interface SendMessageOptions {
+  queryContent?: string;
+  replaceWidget?: {
+    widgetId: string;
+    assistantMessage: ChatMessage;
+  };
+}
+
 type ModelMode = "large" | "small";
 type SearchMode = "quick" | "deep";
 
@@ -273,6 +281,20 @@ function hydrateChatStreamItem(message: ChatMessage): ChatStreamItem | null {
 function hydrateChatHistoryItem(item: ChatHistoryItem): ChatStreamItem | null {
   if (item.type === "widget") return { type: "widget", widget: item.widget };
   return hydrateChatStreamItem(item.message);
+}
+
+function textFromTrustedHtml(html: string): string {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  return (template.content.querySelector("p")?.textContent ?? template.content.textContent ?? "").trim();
+}
+
+function clarificationQuestion(widget: HtmlWidget): string {
+  const dataQuestion = widget.data.question;
+  if (typeof dataQuestion === "string" && dataQuestion.trim()) {
+    return dataQuestion.trim();
+  }
+  return textFromTrustedHtml(widget.html) || widget.title;
 }
 
 function quarterRank(quarter: string): number {
@@ -815,10 +837,18 @@ function App() {
     setOpenTreeKeys(new Set());
   }
 
-  // TEMP_CHAT_RESET_BUTTON: local-only reset until permanent conversation controls exist.
-  function resetChatSession() {
+  async function resetChatSession() {
+    try {
+      const response = await fetch(`/api/v2/conversations?user_id=${encodeURIComponent(runtimeUserId)}`, {
+        method: "DELETE"
+      });
+      if (!response.ok) throw new Error(await response.text());
+      ignoredConversationIdsRef.current.clear();
+    } catch (error) {
+      setStatus(`Chat reset error: ${(error as Error).message}`);
+      return;
+    }
     setActiveConversationId((current) => {
-      if (current) ignoredConversationIdsRef.current.add(current);
       return null;
     });
     setChatItems([]);
@@ -827,6 +857,20 @@ function App() {
     setInput("");
     setQueryFiltersOpen(false);
     setStatus("Ready");
+  }
+
+  async function resolveClarificationWidget(widget: HtmlWidget, question: string): Promise<ChatMessage | null> {
+    if (!activeConversationId) return null;
+    const response = await fetch(
+      `/api/v2/conversations/${encodeURIComponent(activeConversationId)}/clarifications/resolve?user_id=${encodeURIComponent(runtimeUserId)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ widget_id: widget.id, question })
+      }
+    );
+    if (!response.ok) throw new Error(await response.text());
+    return (await response.json()) as ChatMessage;
   }
 
   function openDocumentsFromRow(row: DataAvailabilityRow) {
@@ -883,7 +927,7 @@ function App() {
     setExpandedApps((current) => ({ ...current, preview: true }));
   }
 
-  function runWidgetAction(action: HtmlWidget["actions"][number]) {
+  async function runWidgetAction(action: HtmlWidget["actions"][number], widget: HtmlWidget) {
     const payload = action.payload as Partial<Filters>;
     if (action.action_type === "filter_documents") {
       setFilters({
@@ -900,6 +944,7 @@ function App() {
       filters?: Partial<Filters>;
       resend_query?: string;
       reply?: string;
+      question?: string;
     };
     const patch = clarificationPayload.filters ?? {};
     const nextFilters = {
@@ -912,25 +957,61 @@ function App() {
       keyword: patch.keyword ?? filters.keyword
     };
     setFilters(nextFilters);
-    sendMessage(clarificationPayload.resend_query || clarificationPayload.reply || action.label, nextFilters);
+    const reply = (clarificationPayload.reply || action.label).trim();
+    const question = (clarificationPayload.question || clarificationQuestion(widget)).trim();
+    let assistantMessage: ChatMessage = {
+      id: `assistant-${widget.id}`,
+      role: "assistant",
+      content: question
+    };
+    try {
+      const persistedMessage = await resolveClarificationWidget(widget, question);
+      if (persistedMessage) assistantMessage = persistedMessage;
+    } catch (error) {
+      setStatus(`Clarification update error: ${(error as Error).message}`);
+    }
+    const resendQuery = clarificationPayload.resend_query?.trim();
+    const queryContent = resendQuery && resendQuery !== reply
+      ? `${resendQuery}\n\nClarification answer: ${reply}`
+      : reply;
+    sendMessage(reply, nextFilters, {
+      queryContent,
+      replaceWidget: {
+        widgetId: widget.id,
+        assistantMessage
+      }
+    });
   }
 
-  function sendMessage(message = input, activeFilters = filters) {
+  function sendMessage(message = input, activeFilters = filters, options: SendMessageOptions = {}) {
     const content = message.trim();
     if (!content) return;
+    const queryContent = (options.queryContent ?? content).trim();
+    if (!queryContent) return;
     const turnId = crypto.randomUUID();
-    setChatItems((current) => [
-      ...current,
-      {
-        type: "message",
-        message: { id: `user-${turnId}`, role: "user", content }
-      },
-      {
-        type: "thinking",
-        id: `thinking-${turnId}`,
-        prompt: content
-      }
-    ]);
+    setChatItems((current) => {
+      const replacement = options.replaceWidget;
+      const nextItems = replacement
+        ? current.map((item) => {
+            if (item.type === "widget" && item.widget.id === replacement.widgetId) {
+              return { type: "message", message: replacement.assistantMessage } as ChatStreamItem;
+            }
+            return item;
+          })
+        : current;
+      return [
+        ...nextItems,
+        {
+          type: "message",
+          message: { id: `user-${turnId}`, role: "user", content }
+        },
+        {
+          type: "thinking",
+          id: `thinking-${turnId}`,
+          prompt: content
+        }
+      ];
+    });
     const preferences = {
       fast_mode: modelMode === "small",
       model_mode: modelMode,
@@ -945,7 +1026,7 @@ function App() {
     };
     const payload = JSON.stringify({
       type: "message",
-      query: content,
+      query: queryContent,
       content,
       user_id: runtimeUserId,
       conversation_id: activeConversationId,
@@ -1082,13 +1163,12 @@ function App() {
       data-right-drawer={rightDrawerOpen ? "open" : "closed"}
     >
       <section className="chat-panel">
-        {/* TEMP_CHAT_RESET_BUTTON: remove this toolbar when durable conversation controls ship. */}
         <div className="temp-chat-toolbar">
           <button
             type="button"
             className="icon-command temp-chat-reset-button"
-            title="Start a new temporary chat"
-            aria-label="Start a new temporary chat"
+            title="Start a new chat"
+            aria-label="Start a new chat"
             onClick={resetChatSession}
           >
             <RefreshCw size={15} />
@@ -2268,7 +2348,7 @@ function WidgetView({
   runWidgetAction
 }: {
   widget: HtmlWidget;
-  runWidgetAction: (action: HtmlWidget["actions"][number]) => void;
+  runWidgetAction: (action: HtmlWidget["actions"][number], widget: HtmlWidget) => void;
 }) {
   if (widget.kind === "data_availability") {
     return <DataAvailabilityChatWidget widget={widget} runWidgetAction={runWidgetAction} />;
@@ -2285,7 +2365,7 @@ function WidgetView({
       {widget.actions.length > 0 && (
         <div className="widget-actions">
           {widget.actions.slice(0, 6).map((action) => (
-            <button key={action.id} type="button" className="text-command" onClick={() => runWidgetAction(action)}>
+            <button key={action.id} type="button" className="text-command" onClick={() => runWidgetAction(action, widget)}>
               {action.label}
             </button>
           ))}
@@ -2313,7 +2393,7 @@ function DataAvailabilityChatWidget({
   runWidgetAction
 }: {
   widget: HtmlWidget;
-  runWidgetAction: (action: HtmlWidget["actions"][number]) => void;
+  runWidgetAction: (action: HtmlWidget["actions"][number], widget: HtmlWidget) => void;
 }) {
   const response = asAvailabilityResponse(widget.data);
 
@@ -2379,7 +2459,7 @@ function DataAvailabilityChatWidget({
                       display.startsPeriod ? "period-break" : "",
                       display.startsCategory ? "category-break" : ""
                     ].filter(Boolean).join(" ")}
-                    onClick={() => rowAction && runWidgetAction(rowAction)}
+                    onClick={() => rowAction && runWidgetAction(rowAction, widget)}
                   >
                     {display.periodRowSpan > 0 && (
                       <td rowSpan={display.periodRowSpan} className="merged-cell period-cell">{display.period}</td>

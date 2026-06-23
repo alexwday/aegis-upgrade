@@ -37,6 +37,8 @@ from .schemas import (
     Artifact,
     ArtifactListResponse,
     BootstrapResponse,
+    ChatMessageRecord,
+    ClarificationResolutionRequest,
     ConversationDetailResponse,
     ConversationListResponse,
     DataAvailabilityResponse,
@@ -59,6 +61,8 @@ from .tools.runtime import (
     list_conversations,
     log_process_monitor_stage,
     persist_artifact,
+    reset_runtime_chat,
+    resolve_clarification_widget,
 )
 from .tools.reports import (
     report_html_response,
@@ -71,6 +75,7 @@ from .schemas import (
     ReportSearchResponse,
     ReportSubscriptionRequest,
     ReportSubscriptionResponse,
+    RuntimeResetResponse,
 )
 
 
@@ -261,6 +266,15 @@ async def conversations_endpoint(
     return await list_conversations(user_id=user_id, limit=limit)
 
 
+@router.delete("/conversations", response_model=RuntimeResetResponse)
+async def reset_conversations_endpoint(
+    user_id: str = Query(default=DEFAULT_USER_ID),
+) -> RuntimeResetResponse:
+    """Clear persisted runtime chat state for the current user."""
+    deleted = await reset_runtime_chat(user_id=user_id)
+    return RuntimeResetResponse(user_id=user_id, deleted_conversations=deleted)
+
+
 @router.get(
     "/conversations/{conversation_id}", response_model=ConversationDetailResponse
 )
@@ -275,6 +289,27 @@ async def conversation_detail_endpoint(
     if detail is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return detail
+
+
+@router.post(
+    "/conversations/{conversation_id}/clarifications/resolve",
+    response_model=ChatMessageRecord,
+)
+async def resolve_clarification_endpoint(
+    conversation_id: str,
+    request: ClarificationResolutionRequest,
+    user_id: str = Query(default=DEFAULT_USER_ID),
+) -> ChatMessageRecord:
+    """Replace a clarification option widget with its visible question."""
+    message = await resolve_clarification_widget(
+        conversation_id=conversation_id,
+        user_id=user_id,
+        widget_id=request.widget_id,
+        question=request.question,
+    )
+    if message is None:
+        raise HTTPException(status_code=404, detail="Clarification widget not found")
+    return message
 
 
 @router.get(

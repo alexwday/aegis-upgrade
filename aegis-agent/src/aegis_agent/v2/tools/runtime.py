@@ -321,6 +321,59 @@ async def append_chat_message(
     return _message_from_record(record)
 
 
+async def resolve_clarification_widget(
+    *,
+    conversation_id: str,
+    user_id: str,
+    widget_id: str,
+    question: str,
+) -> ChatMessageRecord | None:
+    """Replace a persisted clarification widget row with its visible question."""
+    clean_question = " ".join(question.split())
+    if not clean_question:
+        return None
+
+    messages = await list_conversation_messages(conversation_id)
+    target_message_id = ""
+    for message in reversed(messages):
+        widget = _widget_from_message_content(message.content)
+        if widget is None:
+            continue
+        if widget.kind == "clarification" and widget.id == widget_id:
+            target_message_id = message.id
+            break
+    if not target_message_id:
+        return None
+
+    record = await fetch_one(
+        """
+        UPDATE public.chat_messages message
+        SET
+            role = 'assistant',
+            content = :content
+        FROM public.chat_conversations conversation
+        WHERE message.message_id = CAST(:message_id AS uuid)
+          AND message.conversation_id = conversation.conversation_id
+          AND message.conversation_id = CAST(:conversation_id AS uuid)
+          AND conversation.user_id = CAST(:user_id AS uuid)
+        RETURNING
+            message.message_id,
+            message.role,
+            message.content
+        """,
+        {
+            "message_id": target_message_id,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "content": clean_question,
+        },
+        execution_id="v2-resolve-clarification-widget",
+    )
+    if record is None:
+        return None
+    return _message_from_record(record)
+
+
 async def list_conversation_artifacts(conversation_id: str) -> ArtifactListResponse:
     """Return artifacts for a conversation, newest first."""
     records = await fetch_all(
@@ -343,6 +396,19 @@ async def list_conversation_artifacts(conversation_id: str) -> ArtifactListRespo
     return ArtifactListResponse(
         artifacts=[_artifact_from_record(record) for record in records]
     )
+
+
+async def reset_runtime_chat(user_id: str = DEFAULT_USER_ID) -> int:
+    """Delete persisted chat conversations for a user and cascade child rows."""
+    deleted = await execute_query(
+        """
+        DELETE FROM public.chat_conversations
+        WHERE user_id = CAST(:user_id AS uuid)
+        """,
+        {"user_id": user_id},
+        execution_id="v2-reset-runtime-chat",
+    )
+    return int(deleted or 0)
 
 
 async def load_conversation_context(
