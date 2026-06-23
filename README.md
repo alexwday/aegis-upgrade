@@ -201,6 +201,10 @@ cd aegis-agent
 ../.venv/bin/python run_fastapi.py --port 8012
 ```
 
+If another local `run_fastapi.py` instance is already listening on that port,
+the command stops it before starting the new server. Pass
+`--no-restart-existing` to preserve the old process and fail on port conflicts.
+
 Open `http://127.0.0.1:8012` and query Q1/Q2 coverage. Example:
 
 ```text

@@ -7,7 +7,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
+import subprocess
 import sys
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List
@@ -290,13 +294,141 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket.send_json({"type": "error", "name": "system", "content": str(exc)})
 
 
+def _listening_pids(port: int) -> list[int]:
+    """Return local process ids listening on a TCP port."""
+    try:
+        completed = subprocess.run(
+            ["lsof", "-tiTCP:%d" % port, "-sTCP:LISTEN"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        logger.warning("fastapi.restart.lsof_missing", port=port)
+        return []
+    if completed.returncode not in {0, 1}:
+        logger.warning(
+            "fastapi.restart.lsof_failed",
+            port=port,
+            stderr=completed.stderr.strip(),
+        )
+        return []
+    pids: list[int] = []
+    for line in completed.stdout.splitlines():
+        try:
+            pid = int(line.strip())
+        except ValueError:
+            continue
+        if pid not in pids:
+            pids.append(pid)
+    return pids
+
+
+def _process_command(pid: int) -> str:
+    """Return the command for a process id, when available."""
+    completed = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "command="],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
+def _is_restartable_aegis_server(command: str) -> bool:
+    """Return whether a command looks like this local Aegis FastAPI server."""
+    normalized = command.lower()
+    return "run_fastapi.py" in normalized or "run_fastapi:app" in normalized
+
+
+def _wait_for_port_release(port: int, *, timeout_seconds: float = 5.0) -> bool:
+    """Wait briefly for a TCP listener to release a port."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not [pid for pid in _listening_pids(port) if pid != os.getpid()]:
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def _restart_existing_server(port: int) -> None:
+    """Terminate an existing Aegis server that already owns the target port."""
+    pids = [pid for pid in _listening_pids(port) if pid != os.getpid()]
+    if not pids:
+        return
+
+    commands = {pid: _process_command(pid) for pid in pids}
+    unsafe = {
+        pid: command
+        for pid, command in commands.items()
+        if not _is_restartable_aegis_server(command)
+    }
+    if unsafe:
+        details = "; ".join(
+            f"{pid}: {command or '<unknown>'}" for pid, command in unsafe.items()
+        )
+        raise RuntimeError(
+            f"Port {port} is already in use, but not by run_fastapi.py: {details}"
+        )
+
+    for pid, command in commands.items():
+        print(f"Restarting existing Aegis FastAPI server on port {port} (pid {pid}).")
+        logger.info(
+            "fastapi.restart.terminating_existing",
+            port=port,
+            pid=pid,
+            command=command,
+        )
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except PermissionError as exc:
+            raise RuntimeError(
+                f"Cannot terminate existing server pid {pid}: {exc}"
+            ) from exc
+
+    if _wait_for_port_release(port):
+        return
+
+    for pid, command in commands.items():
+        if pid not in _listening_pids(port):
+            continue
+        print(f"Existing server pid {pid} did not stop; forcing restart.")
+        logger.warning(
+            "fastapi.restart.force_kill_existing",
+            port=port,
+            pid=pid,
+            command=command,
+        )
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except PermissionError as exc:
+            raise RuntimeError(
+                f"Cannot force-stop existing server pid {pid}: {exc}"
+            ) from exc
+
+    if not _wait_for_port_release(port):
+        raise RuntimeError(f"Port {port} is still in use after restart cleanup.")
+
+
 def main() -> None:
     """Run the development server."""
     parser = argparse.ArgumentParser(description="Run Aegis Agent FastAPI server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--reload", action="store_true")
+    parser.add_argument(
+        "--no-restart-existing",
+        action="store_true",
+        help="Do not stop an existing Aegis server already listening on the port.",
+    )
     args = parser.parse_args()
+
+    if not args.no_restart_existing:
+        _restart_existing_server(args.port)
 
     uvicorn.run(
         "run_fastapi:app",

@@ -67,6 +67,18 @@ def test_fastapi_exposes_source_document_byte_routes() -> None:
     assert 'Content-Disposition": f\'attachment; filename="' in source
 
 
+def test_fastapi_run_command_restarts_existing_aegis_process() -> None:
+    """The dev server command should restart stale local Aegis listeners."""
+    app = Path(__file__).resolve().parents[3] / "run_fastapi.py"
+    source = app.read_text(encoding="utf-8")
+
+    assert "def _restart_existing_server" in source
+    assert "run_fastapi.py" in source
+    assert "run_fastapi:app" in source
+    assert "--no-restart-existing" in source
+    assert "if not args.no_restart_existing" in source
+
+
 def test_chat_template_uses_declared_final_response_shell() -> None:
     """The UI should render the agent-declared shell instead of inferring layout."""
     template = Path(__file__).resolve().parents[3] / "templates" / "chat.html"

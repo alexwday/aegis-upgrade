@@ -33,4 +33,8 @@ cd /path/to/aegis-upgrade/aegis-agent
 ../.venv/bin/python run_fastapi.py --port 8012
 ```
 
+By default the command restarts an existing local `run_fastapi.py` process that
+is already listening on the requested port. Use `--no-restart-existing` if you
+want the command to fail instead when the port is occupied.
+
 Then open `http://127.0.0.1:8012`.
