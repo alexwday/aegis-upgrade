@@ -54,6 +54,18 @@ async def resolve_v2_availability(turn: NormalizedTurn) -> dict[tuple[str, int, 
         for source_id in row.source_ids:
             key = (source_id, int(row.fiscal_year), str(row.quarter).upper())
             index.setdefault(key, set()).update(identifiers)
+    if not index:
+        # A successful read that resolves zero coverage is a controlled gap, but
+        # it is easy to mistake a scope/format problem for genuine no-coverage.
+        # Log it distinctly from the read-failure path above so it is diagnosable.
+        get_logger().warning(
+            "v2.deep.availability_empty",
+            run_uuid=turn.run_uuid,
+            source_ids=turn.source_ids,
+            bank_symbols=turn.bank_symbols,
+            fiscal_years=turn.fiscal_years,
+            quarters=turn.quarters,
+        )
     return index
 
 

@@ -11,7 +11,9 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
+import webbrowser
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List
@@ -54,6 +56,16 @@ SOURCE_FILTER_IDS = {
 async def lifespan(_: FastAPI):
     """Manage server startup and shutdown."""
     logger.info("fastapi.startup", message="Aegis Agent server starting")
+    # Preload prompts at launch so the one-time DB load (which warms the shared
+    # in-memory prompt frame for every agent/subagent) does not land inside the
+    # first user turn. Non-fatal: the inline fallback keeps the agent running.
+    try:
+        from aegis_agent.v2.agent.tool_agent import warm_system_prompt
+
+        db_backed = warm_system_prompt()
+        logger.info("fastapi.startup.prompts_warmed", db_backed=db_backed)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("fastapi.startup.prompt_warmup_failed", error=str(exc))
     yield
     logger.info("fastapi.shutdown", message="Aegis Agent server stopping")
     await close_all_clients()
@@ -414,6 +426,28 @@ def _restart_existing_server(port: int) -> None:
         raise RuntimeError(f"Port {port} is still in use after restart cleanup.")
 
 
+def _browser_host(host: str) -> str:
+    """Return a local browser target for bound server hosts."""
+    if host in {"0.0.0.0", "::"}:
+        return "127.0.0.1"
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
+def _open_browser_later(url: str) -> None:
+    """Open the local V2 interface shortly after Uvicorn starts."""
+    def _open() -> None:
+        try:
+            webbrowser.open(url, new=2)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("fastapi.browser_open_failed", url=url, error=str(exc))
+
+    timer = threading.Timer(1.2, _open)
+    timer.daemon = True
+    timer.start()
+
+
 def main() -> None:
     """Run the development server."""
     parser = argparse.ArgumentParser(description="Run Aegis Agent FastAPI server")
@@ -425,10 +459,20 @@ def main() -> None:
         action="store_true",
         help="Do not stop an existing Aegis server already listening on the port.",
     )
+    parser.add_argument(
+        "--no-open-browser",
+        action="store_true",
+        help="Do not open the V2 browser interface after starting the server.",
+    )
     args = parser.parse_args()
 
     if not args.no_restart_existing:
         _restart_existing_server(args.port)
+
+    if not args.no_open_browser:
+        browser_url = f"http://{_browser_host(args.host)}:{args.port}/v2"
+        print(f"Opening Aegis V2 interface at {browser_url}")
+        _open_browser_later(browser_url)
 
     uvicorn.run(
         "run_fastapi:app",

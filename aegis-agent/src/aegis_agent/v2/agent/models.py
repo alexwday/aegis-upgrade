@@ -9,7 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from ...utils.settings import config
-from ..sources import normalize_source_ids
+from ..sources import SOURCE_IDS, normalize_source_ids
 
 
 SearchMode = Literal["quick", "deep"]
@@ -41,6 +41,8 @@ class NormalizedTurn:
     fiscal_years: list[int] = field(default_factory=list)
     quarters: list[str] = field(default_factory=list)
     keyword: str | None = None
+    source_filter_explicit: bool = False
+    optional_context_selected: bool = False
     search_mode: SearchMode = "quick"
     model_mode: ModelMode = "small"
     model_plan: ModelPlan | None = None
@@ -176,6 +178,21 @@ def _first_dict(*values: Any) -> dict[str, Any]:
     return {}
 
 
+def _has_any_scope_value(context: dict[str, Any], filters: dict[str, Any]) -> bool:
+    """Return whether the user supplied optional bank/period context."""
+    return bool(
+        _string_list(
+            context.get("bank_tickers")
+            or context.get("bank_symbols")
+            or filters.get("bank_tickers")
+            or filters.get("bank_symbols")
+        )
+        or _string_list(context.get("bank_categories") or filters.get("bank_categories"))
+        or _int_list(context.get("fiscal_years") or filters.get("fiscal_years"))
+        or _string_list(context.get("quarters") or filters.get("quarters"))
+    )
+
+
 def _append_unique(values: list[Any], item: Any) -> None:
     """Append an item while preserving the original order."""
     if item not in values:
@@ -216,12 +233,15 @@ def normalize_turn(payload: dict[str, Any]) -> NormalizedTurn:
     )
     preferences = _first_dict(payload.get("preferences"))
 
-    source_ids = normalize_source_ids(
+    source_values = (
         filters.get("data_sources")
         or filters.get("source_ids")
         or optional_context.get("data_sources")
         or optional_context.get("sources")
     )
+    source_ids = normalize_source_ids(source_values)
+    source_filter_explicit = source_values is not None and source_ids != list(SOURCE_IDS)
+    optional_context_selected = _has_any_scope_value(optional_context, filters)
     bank_symbols = _string_list(
         optional_context.get("bank_tickers")
         or optional_context.get("bank_symbols")
@@ -274,6 +294,8 @@ def normalize_turn(payload: dict[str, Any]) -> NormalizedTurn:
         fiscal_years=fiscal_years,
         quarters=quarters,
         keyword=str(filters.get("keyword") or "").strip() or None,
+        source_filter_explicit=source_filter_explicit,
+        optional_context_selected=optional_context_selected,
         search_mode=search_mode,
         model_mode=model_plan.ui_model,
         model_plan=model_plan,

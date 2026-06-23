@@ -136,6 +136,25 @@ def _hydrate_combo(combo: BankPeriodCombination, row: Dict[str, Any]) -> BankPer
     )
 
 
+def _bank_match_keys(value: Any) -> set[str]:
+    """Return lowercased match keys for a bank identifier.
+
+    Includes the full value and its base ticker (the part before a regional
+    suffix such as ``-CA``) so a short ticker like ``RY`` matches a catalog
+    ``RY-CA`` and vice-versa. Without this the deep path silently preflighted
+    every combination as unavailable whenever the turn and the catalog used
+    different ticker formats.
+    """
+    text_value = str(value).strip().lower()
+    if not text_value:
+        return set()
+    keys = {text_value}
+    base = text_value.split("-", 1)[0].strip()
+    if base:
+        keys.add(base)
+    return keys
+
+
 def _split_by_v2_availability(
     source: str,
     combinations: Sequence[BankPeriodCombination],
@@ -147,19 +166,22 @@ def _split_by_v2_availability(
     lowercased bank identifiers (symbol and name) that have data for that source
     and period. This avoids the legacy ``aegis_data_availability`` table, which
     the V2 catalog has replaced with ``data_source_availability`` and
-    ``monitored_institutions``.
+    ``monitored_institutions``. Matching is tolerant of regional ticker suffixes
+    (``RY`` vs ``RY-CA``) via ``_bank_match_keys`` on both sides.
     """
     available: List[BankPeriodCombination] = []
     unavailable: List[BankPeriodCombination] = []
     for combo in combinations:
         key = (source, combo.fiscal_year, combo.quarter)
         identifiers = available_index.get(key) or set()
-        requested = {
-            str(value).lower()
-            for value in (combo.bank_id, combo.bank_symbol, combo.bank_name)
-            if value is not None and str(value).strip()
-        }
-        if requested & identifiers:
+        available_keys: set[str] = set()
+        for identifier in identifiers:
+            available_keys |= _bank_match_keys(identifier)
+        requested: set[str] = set()
+        for value in (combo.bank_id, combo.bank_symbol, combo.bank_name):
+            if value is not None and str(value).strip():
+                requested |= _bank_match_keys(value)
+        if requested & available_keys:
             available.append(combo)
         else:
             unavailable.append(combo)

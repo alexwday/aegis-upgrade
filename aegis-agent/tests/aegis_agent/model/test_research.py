@@ -614,3 +614,29 @@ async def test_check_source_availability_empty_v2_index_marks_all_unavailable(
 
     assert available == []
     assert [combo.bank_symbol for combo in unavailable] == ["TD-CA"]
+
+
+@pytest.mark.asyncio
+async def test_check_source_availability_matches_across_ticker_suffix(
+    monkeypatch,
+) -> None:
+    """A short turn ticker (RY) matches a catalog RY-CA and vice-versa (F4)."""
+
+    def fail_connection(*_args, **_kwargs):
+        raise AssertionError("V2 path must not query aegis_data_availability")
+
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.research.get_connection", fail_connection
+    )
+
+    # Catalog resolved a full ticker; the requested combo carries the short form.
+    context = {
+        "execution_id": "test",
+        "v2_available_combinations": {("transcripts", 2026, "Q1"): {"ry-ca"}},
+    }
+    available, unavailable = await check_source_availability(
+        "transcripts", [_combo("RY")], context
+    )
+
+    assert [combo.bank_symbol for combo in available] == ["RY"]
+    assert unavailable == []

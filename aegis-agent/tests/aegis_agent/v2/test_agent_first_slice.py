@@ -16,6 +16,7 @@ from aegis_agent.v2.agent.models import (
 )
 import aegis_agent.v2.agent.retrieval as retrieval
 from aegis_agent.v2.agent.retrieval import retrieve_quick_evidence
+from aegis_agent.v2.sources import SOURCE_IDS
 
 
 def test_resolve_model_plan_maps_ui_modes_to_internal_tiers() -> None:
@@ -59,6 +60,8 @@ def test_normalize_turn_prefers_v2_contract_fields() -> None:
     assert turn.fiscal_years == [2026]
     assert turn.quarters == ["Q1"]
     assert turn.search_mode == "deep"
+    assert turn.source_filter_explicit is True
+    assert turn.optional_context_selected is True
     assert turn.model_plan is not None
     assert turn.model_plan.orchestrator_tier == "large"
 
@@ -75,6 +78,33 @@ def test_normalize_turn_infers_explicit_text_scope_when_filters_are_missing() ->
     assert turn.bank_symbols == ["RY-CA"]
     assert turn.fiscal_years == [2026]
     assert turn.quarters == ["Q1"]
+    assert turn.source_filter_explicit is False
+    assert turn.optional_context_selected is False
+
+
+def test_normalize_turn_treats_default_ui_state_as_unselected() -> None:
+    """Default all-source and empty optional-context payloads are not selections."""
+    turn = normalize_turn(
+        {
+            "content": "hi",
+            "filters": {"source_ids": list(SOURCE_IDS)},
+            "optional_context": {
+                "bank_symbols": [],
+                "bank_categories": [],
+                "fiscal_years": [],
+                "quarters": [],
+            },
+            "context": {
+                "sources": list(SOURCE_IDS),
+                "search_mode": "quick",
+                "model_mode": "small",
+            },
+        }
+    )
+
+    assert turn.source_ids == list(SOURCE_IDS)
+    assert turn.source_filter_explicit is False
+    assert turn.optional_context_selected is False
 
 
 def test_normalize_turn_keeps_relative_periods_unresolved() -> None:

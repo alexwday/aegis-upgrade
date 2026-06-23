@@ -63,13 +63,23 @@ async def test_availability_turn_streams_tool_widget_and_message(monkeypatch) ->
             bank_categories=["Canadian Banks"],
         )
 
-    async def fake_run_agent_step(_turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None):
+    step_calls = {"n": 0}
+
+    async def fake_run_agent_step(
+        _turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None
+    ):
+        step_calls["n"] += 1
+        if step_calls["n"] == 1:
+            return AgentDecision(
+                kind="tool",
+                tool_call=AgentToolCall(name="check_data_availability", arguments={}),
+            )
+        # Availability is non-terminal: the agent reads the coverage back and
+        # authors the reply (F7).
+        assert scratchpad and scratchpad[-1]["role"] == "tool"
+        assert "check_data_availability" in scratchpad[-1]["content"]
         return AgentDecision(
-            kind="tool",
-            tool_call=AgentToolCall(
-                name="check_data_availability",
-                arguments={},
-            ),
+            kind="direct", content="Coverage: RY-CA Q1 2026 (investor_slides)."
         )
 
     monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
@@ -83,15 +93,21 @@ async def test_availability_turn_streams_tool_widget_and_message(monkeypatch) ->
         event async for event in run_turn({"content": "what data is available?"}, state)
     ]
 
-    assert [event["type"] for event in events] == [
+    types = [event["type"] for event in events]
+    # Tool/widget lifecycle still emitted, in order, with no templated message.
+    assert types[:4] == [
         "tool.started",
         "widget.created",
         "tool.completed",
         "widget.completed",
-        "chat.message",
     ]
+    assert events[2]["payload"]["name"] == "check_data_availability"
     assert state.latest_availability is not None
     assert events[3]["payload"]["widget"]["data"]["rows"][0]["bank_symbol"] == "RY-CA"
+    # The agent authored the coverage reply; the turn closes with it.
+    assert types[-1] == "chat.message"
+    assert events[-1]["payload"].get("final") is True
+    assert events[-1]["payload"]["content"] == "Coverage: RY-CA Q1 2026 (investor_slides)."
 
 
 @pytest.mark.asyncio
@@ -154,21 +170,15 @@ async def test_context_follow_up_routes_to_general_without_research(
 async def test_greeting_routes_to_plain_general_chat(monkeypatch) -> None:
     """Simple greetings should behave like chat, not research output."""
 
-    async def fake_run_agent_step(*_args, **_kwargs):
-        return AgentDecision(
-            kind="direct",
-            content=(
-                "Hi. I can check data availability, find source documents, and "
-                "run research."
-            ),
-        )
+    async def fail_run_agent_step(*_args, **_kwargs):
+        raise AssertionError("greeting should not invoke the agent tool loop")
 
     async def fail_stream_synthesis(*_args, **_kwargs):
         raise AssertionError("greeting should not need LLM synthesis")
         if False:
             yield ""
 
-    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fail_run_agent_step)
     monkeypatch.setattr(
         "aegis_agent.v2.orchestrator.stream_synthesis", fail_stream_synthesis
     )
@@ -183,25 +193,22 @@ async def test_greeting_routes_to_plain_general_chat(monkeypatch) -> None:
     ]
     assert events[0]["payload"]["decision"] == "direct_response"
     assert "aegis_final_shell" not in events[-1]["payload"]["content"]
-    assert "Hi. I can check data availability" in events[-1]["payload"]["content"]
+    assert "Hi. I can help with Aegis research" in events[-1]["payload"]["content"]
 
 
 @pytest.mark.asyncio
 async def test_capabilities_question_gets_static_chat_not_prompt_echo(monkeypatch) -> None:
     """The help path should be useful chat, not a leaked prompt/context response."""
 
-    async def fake_run_agent_step(*_args, **_kwargs):
-        return AgentDecision(
-            kind="direct",
-            content="I can check which sources are available and run research.",
-        )
+    async def fail_run_agent_step(*_args, **_kwargs):
+        raise AssertionError("capabilities help should not invoke the agent tool loop")
 
     async def fail_stream_synthesis(*_args, **_kwargs):
         raise AssertionError("capabilities help should not need LLM synthesis")
         if False:
             yield ""
 
-    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fail_run_agent_step)
     monkeypatch.setattr(
         "aegis_agent.v2.orchestrator.stream_synthesis", fail_stream_synthesis
     )
@@ -215,7 +222,7 @@ async def test_capabilities_question_gets_static_chat_not_prompt_echo(monkeypatc
         "chat.message",
     ]
     content = events[-1]["payload"]["content"]
-    assert "I can check which sources are available" in content
+    assert "I can check which bank disclosure data is available" in content
     assert "Current user message" not in content
     assert "what can you do" not in content
 
@@ -247,14 +254,19 @@ async def test_bank_data_request_routes_to_availability_not_quick_search(monkeyp
             bank_categories=["Canadian Banks"],
         )
 
-    async def fake_run_agent_step(*_args, **_kwargs):
-        return AgentDecision(
-            kind="tool",
-            tool_call=AgentToolCall(
-                name="check_data_availability",
-                arguments={"bank_symbols": ["RY-CA"]},
-            ),
-        )
+    step_calls = {"n": 0}
+
+    async def fake_run_agent_step(_turn, _cc, _llm=None, scratchpad=None, on_delta=None):
+        step_calls["n"] += 1
+        if step_calls["n"] == 1:
+            return AgentDecision(
+                kind="tool",
+                tool_call=AgentToolCall(
+                    name="check_data_availability",
+                    arguments={"bank_symbols": ["RY-CA"]},
+                ),
+            )
+        return AgentDecision(kind="direct", content="RBC has RY-CA Q1 2026 coverage.")
 
     async def fail_retrieve_quick_evidence(*_args, **_kwargs):
         raise AssertionError("availability should not run quick search")
@@ -276,16 +288,19 @@ async def test_bank_data_request_routes_to_availability_not_quick_search(monkeyp
         )
     ]
 
-    assert [event["type"] for event in events] == [
+    types = [event["type"] for event in events]
+    assert types[:4] == [
         "tool.started",
         "widget.created",
         "tool.completed",
         "widget.completed",
-        "chat.message",
     ]
     assert events[2]["payload"]["name"] == "check_data_availability"
     assert events[3]["payload"]["widget"]["kind"] == "data_availability"
     assert events[3]["payload"]["widget"]["data"]["rows"][0]["bank_symbol"] == "RY-CA"
+    # Coverage is fed back and the agent authors the reply (not a templated line).
+    assert types[-1] == "chat.message"
+    assert events[-1]["payload"]["content"] == "RBC has RY-CA Q1 2026 coverage."
 
 
 @pytest.mark.asyncio
@@ -712,6 +727,61 @@ async def test_agent_loop_limit_surfaces_failure(monkeypatch) -> None:
     assert events[-1]["type"] == "chat.message"
 
 
+@pytest.mark.asyncio
+async def test_loop_limit_with_open_shell_closes_the_stream(monkeypatch) -> None:
+    """If the loop limit is hit after a shell was emitted, the open answer stream
+    is closed with a final message instead of being orphaned (F10)."""
+
+    def _present_decision() -> AgentDecision:
+        return AgentDecision(
+            kind="tool",
+            tool_call=AgentToolCall(
+                name="present_final_response",
+                id="call_present",
+                arguments={
+                    "headline": "Capital",
+                    "tiles": [{"label": "CET1", "value": "13.7%"}],
+                },
+            ),
+        )
+
+    step_calls = {"n": 0}
+
+    async def fake_run_agent_step(
+        _turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None
+    ):
+        step_calls["n"] += 1
+        if step_calls["n"] == 1:
+            return _research_tool_decision()
+        return _present_decision()  # never writes the body -> burns the budget
+
+    async def fake_retrieve_quick_evidence(_turn, **_kwargs):
+        return RetrievalResult(chunks=[], gaps=[])
+
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.retrieve_quick_evidence",
+        fake_retrieve_quick_evidence,
+    )
+
+    state = V2SessionState(session_id="session_test")
+    events = [
+        event
+        async for event in run_turn(
+            {"content": "RBC Q1 2026 capital", "filters": {"source_ids": ["rts"]}},
+            state,
+        )
+    ]
+
+    types = [event["type"] for event in events]
+    assert "tool.failed" in types
+    assert types[-1] == "chat.message"
+    # The open answer stream is closed: final + bound to the stream + carries shell.
+    assert events[-1]["payload"].get("final") is True
+    assert events[-1]["payload"].get("stream_id") == state.turn_stream_id
+    assert "aegis_final_shell" in events[-1]["payload"]["content"]
+
+
 def _research_tool_decision() -> AgentDecision:
     return AgentDecision(
         kind="tool",
@@ -824,6 +894,73 @@ async def test_answer_step_failure_falls_back_to_synthesis(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_body_failure_after_present_reuses_shell_and_closes_stream(
+    monkeypatch,
+) -> None:
+    """If the body step fails after present, synthesis reuses the emitted shell and
+    closes the stream rather than orphaning it (F6)."""
+    step_calls = {"n": 0}
+    synth_calls = {"n": 0}
+
+    async def fake_run_agent_step(
+        _turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None
+    ):
+        step_calls["n"] += 1
+        if step_calls["n"] == 1:
+            return _research_tool_decision()
+        if step_calls["n"] == 2:
+            return AgentDecision(
+                kind="tool",
+                tool_call=AgentToolCall(
+                    name="present_final_response",
+                    id="call_present",
+                    arguments={
+                        "headline": "Agent shell",
+                        "tiles": [{"label": "CET1", "value": "13.7%"}],
+                    },
+                ),
+            )
+        raise RuntimeError("model exploded while writing the body")
+
+    async def fake_retrieve_quick_evidence(_turn, **_kwargs):
+        return RetrievalResult(chunks=[], gaps=[])
+
+    async def fake_stream_synthesis(_turn, **_kwargs):
+        synth_calls["n"] += 1
+        yield "Fallback body."
+
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.retrieve_quick_evidence",
+        fake_retrieve_quick_evidence,
+    )
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.stream_synthesis", fake_stream_synthesis
+    )
+
+    state = V2SessionState(session_id="session_test")
+    events = [
+        event
+        async for event in run_turn(
+            {"content": "RBC Q1 2026 capital", "filters": {"source_ids": ["rts"]}},
+            state,
+        )
+    ]
+
+    types = [event["type"] for event in events]
+    # Exactly one shell was emitted (the agent's present shell), not a second one.
+    assert types.count("final_response.started") == 1
+    started = next(e for e in events if e["type"] == "final_response.started")
+    assert started["payload"]["shell"]["summary"]["headline"] == "Agent shell"
+    # Synthesis rendered the body and the stream is closed with a final message.
+    assert synth_calls["n"] == 1
+    assert types[-1] == "chat.message"
+    assert events[-1]["payload"].get("final") is True
+    assert "Fallback body." in events[-1]["payload"]["content"]
+    assert "aegis_final_shell" in events[-1]["payload"]["content"]
+
+
+@pytest.mark.asyncio
 async def test_agent_presents_structured_evidence_backed_tiles(monkeypatch) -> None:
     """present_final_response tiles are agent-authored and evidence-id validated."""
     from aegis_agent.v2.agent.models import EvidenceChunk
@@ -897,6 +1034,244 @@ async def test_agent_presents_structured_evidence_backed_tiles(monkeypatch) -> N
     assert tile["value"] == "13.7%"
     # Hallucinated evidence id was filtered out; only the retrieved id remains.
     assert tile["evidence_ids"] == ["rts:chunk-1"]
+    assert events[-1]["type"] == "chat.message"
+    assert "aegis_final_shell" in events[-1]["payload"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_tile_with_only_hallucinated_evidence_is_dropped(monkeypatch) -> None:
+    """A tile whose citations are all hallucinated is dropped; an uncited tile is
+    kept (F9)."""
+    from aegis_agent.v2.agent.models import EvidenceChunk
+
+    step_calls = {"n": 0}
+
+    async def fake_run_agent_step(
+        _turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None
+    ):
+        step_calls["n"] += 1
+        if step_calls["n"] == 1:
+            return _research_tool_decision()
+        if step_calls["n"] == 2:
+            return AgentDecision(
+                kind="tool",
+                tool_call=AgentToolCall(
+                    name="present_final_response",
+                    id="call_present",
+                    arguments={
+                        "headline": "Capital",
+                        "tiles": [
+                            {
+                                "label": "Backed",
+                                "value": "13.7%",
+                                "evidence_ids": ["rts:chunk-1"],
+                            },
+                            {
+                                "label": "Fabricated",
+                                "value": "99%",
+                                "evidence_ids": ["rts:made-up"],
+                            },
+                            {"label": "Uncited", "value": "n/a"},
+                        ],
+                    },
+                ),
+            )
+        return AgentDecision(kind="direct", content="Body [[rts:chunk-1]].")
+
+    async def fake_retrieve_quick_evidence(_turn, **_kwargs):
+        chunk = EvidenceChunk(
+            source_name="rts",
+            source_display_name="Reports to shareholders",
+            bank_ticker="RY-CA",
+            fiscal_year=2026,
+            quarter="Q1",
+            chunk_id="chunk-1",
+            chunk_content="Capital commentary.",
+        )
+        return RetrievalResult(chunks=[chunk], gaps=[])
+
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.retrieve_quick_evidence",
+        fake_retrieve_quick_evidence,
+    )
+
+    state = V2SessionState(session_id="session_test")
+    events = [
+        event
+        async for event in run_turn(
+            {"content": "RBC Q1 2026 capital", "filters": {"source_ids": ["rts"]}},
+            state,
+        )
+    ]
+
+    started = next(e for e in events if e["type"] == "final_response.started")
+    labels = [tile["label"] for tile in started["payload"]["shell"]["tiles"]]
+    assert labels == ["Backed", "Uncited"]  # "Fabricated" dropped
+
+
+@pytest.mark.asyncio
+async def test_two_research_calls_keep_both_evidence_sets_for_citations(
+    monkeypatch,
+) -> None:
+    """A second run_research must not drop the first call's evidence ids (F5)."""
+    from aegis_agent.v2.agent.models import EvidenceChunk
+
+    step_calls = {"n": 0}
+    retrieve_calls = {"n": 0}
+
+    async def fake_run_agent_step(
+        _turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None
+    ):
+        step_calls["n"] += 1
+        if step_calls["n"] in (1, 2):
+            return _research_tool_decision()
+        if step_calls["n"] == 3:
+            return AgentDecision(
+                kind="tool",
+                tool_call=AgentToolCall(
+                    name="present_final_response",
+                    id="call_present",
+                    arguments={
+                        "headline": "Two-source capital",
+                        "tiles": [
+                            {
+                                "label": "CET1 ratio",
+                                "value": "13.7%",
+                                # one id from each research call
+                                "evidence_ids": ["rts:chunk-1", "rts:chunk-2"],
+                            }
+                        ],
+                    },
+                ),
+            )
+        for token in ["Capital ", "[[rts:chunk-1]] ", "[[rts:chunk-2]]."]:
+            if on_delta is not None:
+                on_delta(token)
+        return AgentDecision(
+            kind="direct", content="Capital [[rts:chunk-1]] [[rts:chunk-2]]."
+        )
+
+    async def fake_retrieve_quick_evidence(_turn, **_kwargs):
+        retrieve_calls["n"] += 1
+        chunk_id = f"chunk-{retrieve_calls['n']}"
+        chunk = EvidenceChunk(
+            source_name="rts",
+            source_display_name="Reports to shareholders",
+            bank_ticker="RY-CA",
+            fiscal_year=2026,
+            quarter="Q1",
+            chunk_id=chunk_id,
+            chunk_content=f"Capital commentary {chunk_id}.",
+        )
+        return RetrievalResult(chunks=[chunk], gaps=[])
+
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.retrieve_quick_evidence",
+        fake_retrieve_quick_evidence,
+    )
+
+    state = V2SessionState(session_id="session_test")
+    events = [
+        event
+        async for event in run_turn(
+            {"content": "RBC Q1 2026 capital", "filters": {"source_ids": ["rts"]}},
+            state,
+        )
+    ]
+
+    assert retrieve_calls["n"] == 2
+    started = next(e for e in events if e["type"] == "final_response.started")
+    tile = started["payload"]["shell"]["tiles"][0]
+    # Both research calls' evidence ids survived validation (neither dropped).
+    assert tile["evidence_ids"] == ["rts:chunk-1", "rts:chunk-2"]
+
+
+@pytest.mark.asyncio
+async def test_preamble_before_present_tool_call_does_not_leak_or_clobber_tiles(
+    monkeypatch,
+) -> None:
+    """A content preamble emitted in the same step as present_final_response is
+    buffered and discarded, so it neither leaks as chat.delta nor flips the
+    shell state that would discard the agent-authored tiles (F1)."""
+    from aegis_agent.v2.agent.models import EvidenceChunk
+
+    step_calls = {"n": 0}
+
+    async def fake_run_agent_step(
+        _turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None
+    ):
+        step_calls["n"] += 1
+        if step_calls["n"] == 1:
+            return _research_tool_decision()
+        if step_calls["n"] == 2:
+            # Model narrates before calling the tool in the same step. This must
+            # not reach the answer stream.
+            if on_delta is not None:
+                on_delta("Let me line up the capital metrics. ")
+            return AgentDecision(
+                kind="tool",
+                tool_call=AgentToolCall(
+                    name="present_final_response",
+                    id="call_present",
+                    arguments={
+                        "headline": "Agent headline",
+                        "tiles": [
+                            {
+                                "label": "CET1 ratio",
+                                "value": "13.7%",
+                                "evidence_ids": ["rts:chunk-1"],
+                            }
+                        ],
+                    },
+                ),
+            )
+        for token in ["Capital ", "strengthened ", "[[rts:chunk-1]]."]:
+            if on_delta is not None:
+                on_delta(token)
+        return AgentDecision(
+            kind="direct", content="Capital strengthened [[rts:chunk-1]]."
+        )
+
+    async def fake_retrieve_quick_evidence(_turn, **_kwargs):
+        chunk = EvidenceChunk(
+            source_name="rts",
+            source_display_name="Reports to shareholders",
+            bank_ticker="RY-CA",
+            fiscal_year=2026,
+            quarter="Q1",
+            chunk_id="chunk-1",
+            chunk_content="Management described capital as strong this quarter.",
+        )
+        return RetrievalResult(chunks=[chunk], gaps=[])
+
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
+    monkeypatch.setattr(
+        "aegis_agent.v2.orchestrator.retrieve_quick_evidence",
+        fake_retrieve_quick_evidence,
+    )
+
+    state = V2SessionState(session_id="session_test")
+    events = [
+        event
+        async for event in run_turn(
+            {"content": "RBC Q1 2026 capital", "filters": {"source_ids": ["rts"]}},
+            state,
+        )
+    ]
+
+    delta_contents = [
+        event["payload"]["content"]
+        for event in events
+        if event["type"] == "chat.delta"
+    ]
+    # The preamble was discarded; only the real body tokens streamed.
+    assert delta_contents == ["Capital ", "strengthened ", "[[rts:chunk-1]]."]
+    # The agent-authored shell (not the deterministic regex shell) was emitted.
+    started = next(e for e in events if e["type"] == "final_response.started")
+    assert started["payload"]["shell"]["summary"]["headline"] == "Agent headline"
+    assert started["payload"]["shell"]["tiles"][0]["value"] == "13.7%"
     assert events[-1]["type"] == "chat.message"
     assert "aegis_final_shell" in events[-1]["payload"]["content"]
 

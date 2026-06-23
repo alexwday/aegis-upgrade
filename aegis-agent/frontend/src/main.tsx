@@ -219,7 +219,37 @@ function uniqueSorted(values: Array<string | number | null | undefined>): string
 }
 
 function activeFilterCount(filters: Filters): number {
-  return filters.source_ids.length;
+  return (isDefaultSourceSelection(filters.source_ids) ? 0 : 1)
+    + filters.bank_symbols.length
+    + filters.bank_categories.length
+    + filters.fiscal_years.length
+    + filters.quarters.length
+    + (filters.keyword.trim() ? 1 : 0);
+}
+
+function isDefaultSourceSelection(sourceIds: string[]): boolean {
+  return sourceIds.length === DEFAULT_SOURCE_IDS.length
+    && DEFAULT_SOURCE_IDS.every((sourceId) => sourceIds.includes(sourceId));
+}
+
+function buildPayloadFilters(filters: Filters): Partial<Filters> | undefined {
+  const payload: Partial<Filters> = {};
+  if (!isDefaultSourceSelection(filters.source_ids)) {
+    payload.source_ids = filters.source_ids;
+  }
+  if (filters.keyword.trim()) {
+    payload.keyword = filters.keyword.trim();
+  }
+  return Object.keys(payload).length ? payload : undefined;
+}
+
+function buildOptionalContextPayload(filters: Filters): Partial<Filters> | undefined {
+  const payload: Partial<Filters> = {};
+  if (filters.bank_categories.length) payload.bank_categories = filters.bank_categories;
+  if (filters.bank_symbols.length) payload.bank_symbols = filters.bank_symbols;
+  if (filters.fiscal_years.length) payload.fiscal_years = filters.fiscal_years;
+  if (filters.quarters.length) payload.quarters = filters.quarters;
+  return Object.keys(payload).length ? payload : undefined;
 }
 
 function withoutThinking(items: ChatStreamItem[]): ChatStreamItem[] {
@@ -281,6 +311,277 @@ function hydrateChatStreamItem(message: ChatMessage): ChatStreamItem | null {
 function hydrateChatHistoryItem(item: ChatHistoryItem): ChatStreamItem | null {
   if (item.type === "widget") return { type: "widget", widget: item.widget };
   return hydrateChatStreamItem(item.message);
+}
+
+function stripEvidenceMarkers(value: string | null | undefined): string {
+  return String(value ?? "").replace(/\[\[[^\]]+\]\]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function isSafeMarkdownHref(href: string): boolean {
+  const trimmed = href.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("#") || trimmed.startsWith("/")) return true;
+  try {
+    const url = new URL(trimmed, window.location.href);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function renderInlineMarkdown(value: string, keyPrefix: string): React.ReactNode[] {
+  const nodes: React.ReactNode[] = [];
+  const pattern = /(\[\[[^\]]+\]\]|\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|\*([^*]+)\*)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(value)) !== null) {
+    if (match.index > lastIndex) {
+      nodes.push(value.slice(lastIndex, match.index));
+    }
+
+    const token = match[0];
+    const key = `${keyPrefix}-${nodes.length}`;
+    if (token.startsWith("[[")) {
+      nodes.push(
+        <span className="citation-chip" key={key}>
+          {token.slice(2, -2)}
+        </span>
+      );
+    } else if (match[2] !== undefined && match[3] !== undefined) {
+      const href = match[3].trim();
+      nodes.push(
+        isSafeMarkdownHref(href) ? (
+          <a href={href} target="_blank" rel="noopener noreferrer" key={key}>
+            {match[2]}
+          </a>
+        ) : (
+          match[2]
+        )
+      );
+    } else if (match[4] !== undefined) {
+      nodes.push(<code key={key}>{match[4]}</code>);
+    } else if (match[5] !== undefined) {
+      nodes.push(<strong key={key}>{match[5]}</strong>);
+    } else if (match[6] !== undefined) {
+      nodes.push(<em key={key}>{match[6]}</em>);
+    }
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < value.length) {
+    nodes.push(value.slice(lastIndex));
+  }
+  return nodes;
+}
+
+function renderInlineMarkdownWithBreaks(value: string, keyPrefix: string): React.ReactNode[] {
+  return value.split("\n").flatMap((line, index) => {
+    const nodes = renderInlineMarkdown(line, `${keyPrefix}-line-${index}`);
+    return index === 0 ? nodes : [<br key={`${keyPrefix}-br-${index}`} />, ...nodes];
+  });
+}
+
+function splitMarkdownTableRow(line: string): string[] {
+  const trimmed = line.trim();
+  const bounded = trimmed.startsWith("|") && trimmed.endsWith("|") ? trimmed.slice(1, -1) : trimmed;
+  return bounded.split("|").map((cell) => cell.trim());
+}
+
+function isMarkdownTableDivider(line: string): boolean {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function isMarkdownTableStart(lines: string[], index: number): boolean {
+  const line = String(lines[index] ?? "").trim();
+  const next = String(lines[index + 1] ?? "").trim();
+  return line.includes("|") && isMarkdownTableDivider(next);
+}
+
+function renderMarkdownTable(lines: string[], startIndex: number, key: string): { node: React.ReactNode; nextIndex: number } {
+  const headers = splitMarkdownTableRow(lines[startIndex]);
+  const rows: string[][] = [];
+  let index = startIndex + 2;
+
+  while (index < lines.length && String(lines[index] ?? "").trim().includes("|")) {
+    const rawLine = String(lines[index] ?? "").trim();
+    if (!rawLine || isMarkdownTableDivider(rawLine)) break;
+    rows.push(splitMarkdownTableRow(rawLine));
+    index += 1;
+  }
+
+  return {
+    node: (
+      <div className="markdown-table-wrap" key={key}>
+        <table className="markdown-table">
+          <thead>
+            <tr>
+              {headers.map((header, cellIndex) => (
+                <th key={`${key}-head-${cellIndex}`}>{renderInlineMarkdown(header, `${key}-head-${cellIndex}`)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={`${key}-row-${rowIndex}`}>
+                {headers.map((_, cellIndex) => (
+                  <td key={`${key}-cell-${rowIndex}-${cellIndex}`}>
+                    {renderInlineMarkdown(row[cellIndex] ?? "", `${key}-cell-${rowIndex}-${cellIndex}`)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    ),
+    nextIndex: index
+  };
+}
+
+function markdownBlockBoundary(line: string, lines: string[], index: number): boolean {
+  const trimmed = line.trim();
+  return (
+    !trimmed ||
+    trimmed.startsWith("```") ||
+    /^#{1,3}\s+/.test(trimmed) ||
+    /^\s*[-*]\s+/.test(line) ||
+    /^\s*\d+[.)]\s+/.test(line) ||
+    /^>\s?/.test(line) ||
+    isMarkdownTableStart(lines, index)
+  );
+}
+
+function renderMarkdownBlocks(content: string): React.ReactNode[] {
+  const normalized = content.replace(/\n{3,}/g, "\n\n").trim();
+  if (!normalized) return [];
+
+  const lines = normalized.split(/\r?\n/);
+  const blocks: React.ReactNode[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = String(lines[index] ?? "");
+    const trimmed = line.trim();
+    const key = `md-${blocks.length}`;
+
+    if (!trimmed) {
+      index += 1;
+      continue;
+    }
+
+    if (trimmed.startsWith("```")) {
+      const language = trimmed.slice(3).trim();
+      const codeLines: string[] = [];
+      index += 1;
+      while (index < lines.length && !String(lines[index] ?? "").trim().startsWith("```")) {
+        codeLines.push(String(lines[index] ?? ""));
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      blocks.push(
+        <pre key={key}>
+          <code className={language ? `language-${language}` : undefined}>{codeLines.join("\n")}</code>
+        </pre>
+      );
+      continue;
+    }
+
+    if (isMarkdownTableStart(lines, index)) {
+      const table = renderMarkdownTable(lines, index, key);
+      blocks.push(table.node);
+      index = table.nextIndex;
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      const children = renderInlineMarkdown(heading[2], `${key}-heading`);
+      if (level === 1) {
+        blocks.push(<h1 key={key}>{children}</h1>);
+      } else if (level === 2) {
+        blocks.push(<h2 key={key}>{children}</h2>);
+      } else {
+        blocks.push(<h3 key={key}>{children}</h3>);
+      }
+      index += 1;
+      continue;
+    }
+
+    if (/^\s*[-*]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const item = String(lines[index] ?? "").match(/^\s*[-*]\s+(.+)$/);
+        if (!item) break;
+        items.push(item[1]);
+        index += 1;
+      }
+      blocks.push(
+        <ul key={key}>
+          {items.map((item, itemIndex) => (
+            <li key={`${key}-item-${itemIndex}`}>{renderInlineMarkdown(item, `${key}-item-${itemIndex}`)}</li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items: string[] = [];
+      while (index < lines.length) {
+        const item = String(lines[index] ?? "").match(/^\s*\d+[.)]\s+(.+)$/);
+        if (!item) break;
+        items.push(item[1]);
+        index += 1;
+      }
+      blocks.push(
+        <ol key={key}>
+          {items.map((item, itemIndex) => (
+            <li key={`${key}-item-${itemIndex}`}>{renderInlineMarkdown(item, `${key}-item-${itemIndex}`)}</li>
+          ))}
+        </ol>
+      );
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quoteLines: string[] = [];
+      while (index < lines.length) {
+        const quote = String(lines[index] ?? "").match(/^>\s?(.*)$/);
+        if (!quote) break;
+        quoteLines.push(quote[1]);
+        index += 1;
+      }
+      blocks.push(<blockquote key={key}>{renderInlineMarkdownWithBreaks(quoteLines.join("\n"), `${key}-quote`)}</blockquote>);
+      continue;
+    }
+
+    const paragraph = [trimmed];
+    index += 1;
+    while (index < lines.length && !markdownBlockBoundary(String(lines[index] ?? ""), lines, index)) {
+      paragraph.push(String(lines[index] ?? "").trim());
+      index += 1;
+    }
+    blocks.push(<p key={key}>{renderInlineMarkdownWithBreaks(paragraph.join("\n"), `${key}-paragraph`)}</p>);
+  }
+
+  return blocks;
+}
+
+function MarkdownContent({
+  content,
+  className = "",
+  drafting = false
+}: {
+  content: string;
+  className?: string;
+  drafting?: boolean;
+}) {
+  const blocks = renderMarkdownBlocks(content);
+  if (blocks.length === 0 && !drafting) return null;
+  return <div className={`markdown-content ${className} ${drafting ? "drafting" : ""}`.trim()}>{blocks}</div>;
 }
 
 function textFromTrustedHtml(html: string): string {
@@ -1018,23 +1319,18 @@ function App() {
       search_mode: searchMode,
       research_depth: searchMode === "quick" ? "short" : "long"
     };
-    const optionalContext = {
-      bank_categories: activeFilters.bank_categories,
-      bank_tickers: activeFilters.bank_symbols,
-      fiscal_years: activeFilters.fiscal_years,
-      quarters: activeFilters.quarters
-    };
+    const payloadFilters = buildPayloadFilters(activeFilters);
+    const optionalContext = buildOptionalContextPayload(activeFilters);
     const payload = JSON.stringify({
       type: "message",
       query: queryContent,
       content,
       user_id: runtimeUserId,
       conversation_id: activeConversationId,
-      filters: activeFilters,
+      filters: payloadFilters,
       optional_context: optionalContext,
       model_selection: modelMode,
       search_selection: searchMode,
-      context: { ...buildQueryContext(activeFilters), ...preferences },
       preferences
     });
     window.setTimeout(() => {
@@ -2317,28 +2613,33 @@ function ReportSchedulerPanel({
 }
 
 function MessageBubble({ message }: { message: ChatMessage }) {
+  const isFinalResponse = Boolean(message.finalShell);
   return (
-    <div className={`message ${message.role} ${message.finalShell ? "final-response-message" : ""}`}>
+    <div className={`message ${message.role} ${isFinalResponse ? "final-response-message" : ""}`}>
       <span>{message.role === "assistant" ? "agent" : message.role}</span>
       {message.finalShell?.summary && (
         <section className="final-response-shell">
-          <small>{message.finalShell.summary.eyebrow ?? "Aegis"}</small>
-          <strong>{message.finalShell.summary.headline}</strong>
-          {message.finalShell.summary.dek && <p>{message.finalShell.summary.dek}</p>}
+          <small>{stripEvidenceMarkers(message.finalShell.summary.eyebrow ?? "Aegis")}</small>
+          <strong>{stripEvidenceMarkers(message.finalShell.summary.headline)}</strong>
+          {message.finalShell.summary.dek && <p>{stripEvidenceMarkers(message.finalShell.summary.dek)}</p>}
           {(message.finalShell.tiles ?? []).length > 0 && (
             <div className="final-response-tiles">
               {(message.finalShell.tiles ?? []).slice(0, 4).map((tile, index) => (
                 <div className="final-response-tile" key={`${tile.label}-${index}`}>
-                  <span>{tile.label}</span>
-                  <strong>{tile.value}</strong>
-                  {tile.context && <small>{tile.context}</small>}
+                  <span>{stripEvidenceMarkers(tile.label)}</span>
+                  <strong>{stripEvidenceMarkers(tile.value)}</strong>
+                  {tile.context && <small>{stripEvidenceMarkers(tile.context)}</small>}
                 </div>
               ))}
             </div>
           )}
         </section>
       )}
-      <p>{message.content}</p>
+      <MarkdownContent
+        content={message.content}
+        className={isFinalResponse ? "final-response-body" : "message-body"}
+        drafting={isFinalResponse && !message.content.trim()}
+      />
     </div>
   );
 }
