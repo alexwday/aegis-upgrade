@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from html import escape
@@ -53,14 +52,6 @@ from .tools.runtime import load_conversation_context
 
 MAX_AGENT_STEPS = 6
 AgentStepStatus = Literal["continue", "complete", "awaiting_user", "error"]
-GREETING_RE = re.compile(
-    r"^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening)|yo)[.!?\s]*$",
-    re.IGNORECASE,
-)
-CAPABILITIES_RE = re.compile(
-    r"^(?:help|help me|what can you do|how can you help|what is aegis|what are you)[.!?\s]*$",
-    re.IGNORECASE,
-)
 
 
 @dataclass
@@ -115,25 +106,6 @@ def _message_payload(role: str, content: str, **extra: Any) -> dict[str, Any]:
     payload = ChatMessagePayload(role=role, content=content).model_dump(mode="json")
     payload.update(extra)
     return payload
-
-
-def _simple_conversation_response(turn: NormalizedTurn) -> str | None:
-    """Return a direct non-research response for simple conversational turns."""
-    content = " ".join(turn.content.lower().split())
-    if GREETING_RE.match(content):
-        return (
-            "Hi. I can help with Aegis research: check data availability, find "
-            "source documents, and run quick or deep analysis on Canadian "
-            "financial institution disclosures."
-        )
-    if CAPABILITIES_RE.search(content):
-        return (
-            "I can check which bank disclosure data is available, surface source "
-            "documents, and run scoped research across filings, slides, reports, "
-            "Pillar 3, and transcripts. Add optional bank or period context when "
-            "you want a specific issuer and quarter."
-        )
-    return None
 
 
 def _reset_turn_state(state: V2SessionState, turn: NormalizedTurn) -> None:
@@ -1138,13 +1110,9 @@ async def run_turn(
         )
         return
 
-    simple_response = _simple_conversation_response(turn)
-    if simple_response is not None:
-        _reset_turn_state(state, turn)
-        async for item in _finish_answer(state, turn, simple_response):
-            yield item
-        return
-
+    # Every non-empty message goes to the agent; the agent owns the whole turn and
+    # decides how to respond (greetings, small talk, availability, research). There
+    # are no regex shortcuts or canned constants.
     async for item in _run_agent_loop(state, turn):
         yield item
 
@@ -1188,8 +1156,12 @@ async def _run_agent_loop(
                 return
 
         try:
+            stream_live = state.turn_shell_emitted or state.turn_answer_mode not in {
+                "quick",
+                "deep",
+            }
             async for item in _run_streaming_step(
-                state, turn, stream_live=state.turn_shell_emitted
+                state, turn, stream_live=stream_live
             ):
                 if "decision" in item:
                     decision = item["decision"]
@@ -1253,17 +1225,20 @@ async def _run_streaming_step(
     header) and a final ``{"decision": AgentDecision}``. Bridges the agent step's
     ``on_delta`` callback through a queue.
 
-    A model may emit a content preamble *before* a tool call in the same step
-    (e.g. "Let me check..."). Streaming that content live would leak narration
-    and prematurely open the answer header, which corrupts shell state (a stray
-    token flips ``turn_shell_emitted`` and discards the agent-authored tiles from
-    ``present_final_response``). To prevent that, content is only streamed live
-    once we are already in the answer phase (``stream_live``, set after
-    ``present_final_response``). Otherwise content is buffered and flushed only if
-    the step resolved to a direct answer; if it resolved to a tool call the
-    buffered preamble is discarded.
+    Direct answers stream live from the first token in general conversation mode
+    so simple turns do not sit behind the thinking indicator until the whole step
+    ends. Research-backed turns still buffer until ``present_final_response``
+    opens the final shell; this preserves the guard against accidental pre-tool
+    narration clobbering the agent-authored shell.
+
+    ``stream_live=False`` remains available for callers that need the older
+    defensive behavior: content is buffered and flushed only if the step resolves
+    to a direct answer; if it resolves to a tool call the buffered preamble is
+    discarded.
     """
     delta_queue: asyncio.Queue[str] = asyncio.Queue()
+    stream_was_open = state.turn_shell_emitted
+    streamed_live_this_step = False
 
     def _on_delta(text: str) -> None:
         delta_queue.put_nowait(text)
@@ -1281,13 +1256,21 @@ async def _run_streaming_step(
     buffered: list[str] = []
 
     async def _consume(text: str) -> AsyncIterator[dict[str, Any]]:
+        nonlocal streamed_live_this_step
         if stream_live:
+            streamed_live_this_step = True
             async for item in _emit_answer_delta(state, turn, text):
                 yield {"event": item}
         else:
             buffered.append(text)
 
-    while not (step_task.done() and delta_queue.empty()):
+    while True:
+        if step_task.done():
+            while not delta_queue.empty():
+                async for item in _consume(delta_queue.get_nowait()):
+                    yield item
+            break
+
         get_task = asyncio.create_task(delta_queue.get())
         done, _pending = await asyncio.wait(
             {step_task, get_task}, return_when=asyncio.FIRST_COMPLETED
@@ -1302,13 +1285,19 @@ async def _run_streaming_step(
             except asyncio.CancelledError:
                 pass
 
-    while not delta_queue.empty():
-        async for item in _consume(delta_queue.get_nowait()):
-            yield item
-
-    # ``result()`` re-raises a failed step here, before any buffered preamble is
-    # emitted, so a failed step never leaks partial content into the answer.
+    # ``result()`` re-raises a failed step here. With ``stream_live=False`` this
+    # happens before any buffered preamble is emitted; with live streaming enabled,
+    # any already-sent content is treated as part of the user-visible stream.
     decision = step_task.result()
+
+    if decision.kind == "tool" and streamed_live_this_step and not stream_was_open:
+        # The model violated the no-preamble-before-tools contract. The leaked UI
+        # token cannot be recalled, but the next tool step must still be able to
+        # open the correct answer shell.
+        state.turn_shell = None
+        state.turn_shell_emitted = False
+        state.turn_streamed_any = False
+        state.turn_streamed_text = ""
 
     if buffered and decision.kind == "direct":
         for text in buffered:

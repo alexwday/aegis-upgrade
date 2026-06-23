@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 
 import pytest
@@ -167,64 +168,114 @@ async def test_context_follow_up_routes_to_general_without_research(
 
 
 @pytest.mark.asyncio
-async def test_greeting_routes_to_plain_general_chat(monkeypatch) -> None:
-    """Simple greetings should behave like chat, not research output."""
+async def test_greeting_routes_through_agent(monkeypatch) -> None:
+    """Greetings go through the agent loop, not a hardcoded shortcut."""
 
-    async def fail_run_agent_step(*_args, **_kwargs):
-        raise AssertionError("greeting should not invoke the agent tool loop")
+    seen: dict[str, str] = {}
 
-    async def fail_stream_synthesis(*_args, **_kwargs):
-        raise AssertionError("greeting should not need LLM synthesis")
-        if False:
-            yield ""
+    async def fake_run_agent_step(
+        turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None
+    ):
+        seen["user_message"] = turn.content
+        if on_delta is not None:
+            on_delta("Hey! ")
+            on_delta("What can I dig into for you?")
+        return AgentDecision(kind="direct", content="Hey! What can I dig into for you?")
 
-    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fail_run_agent_step)
-    monkeypatch.setattr(
-        "aegis_agent.v2.orchestrator.stream_synthesis", fail_stream_synthesis
-    )
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
 
     state = V2SessionState(session_id="session_test")
     events = [event async for event in run_turn({"content": "hi"}, state)]
 
+    # The agent owns the turn: it saw the greeting and authored the reply.
+    assert seen["user_message"] == "hi"
     assert [event["type"] for event in events] == [
         "tool.completed",
+        "chat.delta",
         "chat.delta",
         "chat.message",
     ]
     assert events[0]["payload"]["decision"] == "direct_response"
+    assert [events[1]["payload"]["content"], events[2]["payload"]["content"]] == [
+        "Hey! ",
+        "What can I dig into for you?",
+    ]
     assert "aegis_final_shell" not in events[-1]["payload"]["content"]
-    assert "Hi. I can help with Aegis research" in events[-1]["payload"]["content"]
+    assert events[-1]["payload"]["content"] == "Hey! What can I dig into for you?"
 
 
 @pytest.mark.asyncio
-async def test_capabilities_question_gets_static_chat_not_prompt_echo(monkeypatch) -> None:
-    """The help path should be useful chat, not a leaked prompt/context response."""
+async def test_capabilities_question_routes_through_agent(monkeypatch) -> None:
+    """Capability/help questions also go through the agent, with no canned text."""
 
-    async def fail_run_agent_step(*_args, **_kwargs):
-        raise AssertionError("capabilities help should not invoke the agent tool loop")
+    seen: dict[str, str] = {}
 
-    async def fail_stream_synthesis(*_args, **_kwargs):
-        raise AssertionError("capabilities help should not need LLM synthesis")
-        if False:
-            yield ""
+    async def fake_run_agent_step(
+        turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None
+    ):
+        seen["user_message"] = turn.content
+        if on_delta is not None:
+            on_delta("I can check coverage ")
+            on_delta("and run scoped research on bank disclosures.")
+        return AgentDecision(
+            kind="direct",
+            content="I can check coverage and run scoped research on bank disclosures.",
+        )
 
-    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fail_run_agent_step)
-    monkeypatch.setattr(
-        "aegis_agent.v2.orchestrator.stream_synthesis", fail_stream_synthesis
-    )
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
 
     state = V2SessionState(session_id="session_test")
     events = [event async for event in run_turn({"content": "what can you do"}, state)]
 
+    assert seen["user_message"] == "what can you do"
     assert [event["type"] for event in events] == [
         "tool.completed",
         "chat.delta",
+        "chat.delta",
         "chat.message",
     ]
+    assert events[0]["payload"]["decision"] == "direct_response"
     content = events[-1]["payload"]["content"]
-    assert "I can check which bank disclosure data is available" in content
-    assert "Current user message" not in content
-    assert "what can you do" not in content
+    assert content == "I can check coverage and run scoped research on bank disclosures."
+
+
+@pytest.mark.asyncio
+async def test_direct_answer_delta_yields_before_agent_step_finishes(monkeypatch) -> None:
+    """Direct answer tokens are visible while the agent step is still running."""
+
+    proceed = asyncio.Event()
+
+    async def fake_run_agent_step(
+        turn, _conversation_context, _llm_context=None, scratchpad=None, on_delta=None
+    ):
+        assert turn.content == "hi"
+        assert on_delta is not None
+        on_delta("Live ")
+        await proceed.wait()
+        on_delta("answer.")
+        return AgentDecision(kind="direct", content="Live answer.")
+
+    monkeypatch.setattr("aegis_agent.v2.orchestrator.run_agent_step", fake_run_agent_step)
+
+    state = V2SessionState(session_id="session_test")
+    stream = run_turn({"content": "hi"}, state).__aiter__()
+
+    first_event = await asyncio.wait_for(stream.__anext__(), timeout=0.5)
+    assert first_event["type"] == "tool.completed"
+    assert first_event["payload"]["decision"] == "direct_response"
+
+    first_delta = await asyncio.wait_for(stream.__anext__(), timeout=0.5)
+    assert first_delta["type"] == "chat.delta"
+    assert first_delta["payload"]["content"] == "Live "
+
+    proceed.set()
+    remaining = [event async for event in stream]
+    assert [event["type"] for event in remaining] == [
+        "chat.delta",
+        "chat.message",
+    ]
+    assert remaining[0]["payload"]["content"] == "answer."
+    assert remaining[-1]["payload"]["content"] == "Live answer."
 
 
 @pytest.mark.asyncio

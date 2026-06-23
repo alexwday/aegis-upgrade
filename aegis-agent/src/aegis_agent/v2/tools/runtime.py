@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from typing import Any
@@ -421,8 +422,12 @@ async def load_conversation_context(
     """Return structured prior conversation context for agent follow-up turns."""
     if not conversation_id:
         return ConversationContext()
-    messages = await list_conversation_messages(conversation_id)
-    artifacts = await list_conversation_artifacts(conversation_id)
+    # The message and artifact reads are independent; run them concurrently so the
+    # turn waits on one round-trip instead of two (matters most on a remote DB).
+    messages, artifacts = await asyncio.gather(
+        list_conversation_messages(conversation_id),
+        list_conversation_artifacts(conversation_id),
+    )
     return build_conversation_context(
         messages=messages,
         artifacts=artifacts.artifacts,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import List, Optional
@@ -47,6 +48,7 @@ from .schemas import (
     DocumentSearchResponse,
     HtmlWidget,
 )
+from ..utils.logging import get_logger
 from .tools.catalog import list_data_sources, optional_context
 from .tools.availability import check_data_availability
 from .tools.documents import list_documents
@@ -80,6 +82,33 @@ from .schemas import (
 
 
 router = APIRouter(prefix="/api/v2", tags=["aegis-v2"])
+
+logger = get_logger()
+
+# Holds in-flight background telemetry tasks so the event loop does not garbage
+# collect them mid-write. Tasks remove themselves on completion.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _log_stage_in_background(**kwargs) -> None:
+    """Persist a process-monitor stage without blocking the user-facing stream.
+
+    Process-monitor rows are observational telemetry, so their write should never
+    sit on the critical path of a turn (e.g. in front of ``run_turn`` or between
+    streamed events). We fire them as tracked background tasks: references are held
+    in ``_BACKGROUND_TASKS`` to prevent premature GC, and failures are logged
+    rather than surfaced to the user or lost as unretrieved task exceptions.
+    """
+
+    async def _runner() -> None:
+        try:
+            await log_process_monitor_stage(**kwargs)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("v2.process_monitor.background_log_failed", error=str(exc))
+
+    task = asyncio.create_task(_runner())
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _widget_message_content(widget: HtmlWidget) -> str:
@@ -528,7 +557,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                     or payload.get("search_mode"),
                 },
             )
-            await log_process_monitor_stage(
+            _log_stage_in_background(
                 run_uuid=run_uuid,
                 user_id=user_id,
                 stage_name=accepted_stage.stage_name,
@@ -559,7 +588,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 run_uuid=run_uuid,
                 details="V2 websocket turn completed.",
             )
-            await log_process_monitor_stage(
+            _log_stage_in_background(
                 run_uuid=run_uuid,
                 user_id=user_id,
                 stage_name=completed_stage.stage_name,

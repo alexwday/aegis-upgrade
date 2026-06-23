@@ -88,8 +88,6 @@ const emptyFilters: Filters = {
   keyword: ""
 };
 
-const THINKING_PREVIEW_DELAY_MS = 1200;
-
 type DrawerAppKey =
   | "coverage"
   | "files"
@@ -1333,9 +1331,7 @@ function App() {
       search_selection: searchMode,
       preferences
     });
-    window.setTimeout(() => {
-      socketRef.current?.send(payload);
-    }, THINKING_PREVIEW_DELAY_MS);
+    socketRef.current?.send(payload);
     setInput("");
     setQueryFiltersOpen(false);
   }
