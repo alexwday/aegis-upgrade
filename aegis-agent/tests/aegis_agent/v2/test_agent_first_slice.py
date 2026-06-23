@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from aegis_agent.v2.agent.deep import has_deep_scope, research_arguments
@@ -181,7 +183,11 @@ async def test_deep_research_uses_supplied_llm_context(monkeypatch) -> None:
         captured["context"] = context
         return {"status": "success", "findings": []}
 
+    async def fake_optional_context(_filters):
+        return SimpleNamespace(rows=[])
+
     monkeypatch.setattr(deep, "run_research_tool", fake_run_research_tool)
+    monkeypatch.setattr(deep, "optional_context", fake_optional_context)
     turn = normalize_turn(
         {
             "content": "Analyze provisions",

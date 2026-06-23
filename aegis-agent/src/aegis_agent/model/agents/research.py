@@ -136,12 +136,46 @@ def _hydrate_combo(combo: BankPeriodCombination, row: Dict[str, Any]) -> BankPer
     )
 
 
+def _split_by_v2_availability(
+    source: str,
+    combinations: Sequence[BankPeriodCombination],
+    available_index: Dict[Any, Any],
+) -> Tuple[List[BankPeriodCombination], List[BankPeriodCombination]]:
+    """Split combinations using V2 catalog availability injected by the V2 deep path.
+
+    ``available_index`` maps ``(source_id, fiscal_year, quarter)`` to a set of
+    lowercased bank identifiers (symbol and name) that have data for that source
+    and period. This avoids the legacy ``aegis_data_availability`` table, which
+    the V2 catalog has replaced with ``data_source_availability`` and
+    ``monitored_institutions``.
+    """
+    available: List[BankPeriodCombination] = []
+    unavailable: List[BankPeriodCombination] = []
+    for combo in combinations:
+        key = (source, combo.fiscal_year, combo.quarter)
+        identifiers = available_index.get(key) or set()
+        requested = {
+            str(value).lower()
+            for value in (combo.bank_id, combo.bank_symbol, combo.bank_name)
+            if value is not None and str(value).strip()
+        }
+        if requested & identifiers:
+            available.append(combo)
+        else:
+            unavailable.append(combo)
+    return available, unavailable
+
+
 async def check_source_availability(
     source: str,
     combinations: Sequence[BankPeriodCombination],
     context: Dict[str, Any],
 ) -> Tuple[List[BankPeriodCombination], List[BankPeriodCombination]]:
     """Split requested combinations into source-available and unavailable sets."""
+    v2_available_index = context.get("v2_available_combinations")
+    if v2_available_index is not None:
+        return _split_by_v2_availability(source, combinations, v2_available_index)
+
     years = sorted({combo.fiscal_year for combo in combinations})
     quarters = sorted({combo.quarter for combo in combinations})
 
@@ -562,7 +596,7 @@ def _result_from_document_raw(
         gaps.append(
             Gap(
                 combo_label=f"{source_label}: {combo.label}",
-                reason=f"No {source_label} data is available in aegis_data_availability.",
+                reason=f"No {source_label} data is available for the requested bank-period.",
             )
         )
 
@@ -616,7 +650,7 @@ async def _run_document_source(
             gaps=[
                 Gap(
                     combo_label=f"{source_label}: {combo.label}",
-                    reason=f"No {source_label} data is available in aegis_data_availability.",
+                    reason=f"No {source_label} data is available for the requested bank-period.",
                 )
                 for combo in unavailable
             ],

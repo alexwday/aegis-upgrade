@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def test_chat_template_uses_structured_evidence_links() -> None:
     """The UI should not regex-parse parenthetical citations into duplicate chips."""
@@ -227,6 +229,17 @@ def test_chat_template_draws_planner_point_specs() -> None:
     assert "return renderHeatmapChart(artifact, facts.length ? facts : pointFacts);" in html
 
 
+@pytest.mark.skip(
+    reason=(
+        "Covers frozen V1 single-agent chart-slot behavior. The V1 "
+        "aegis_agent/system.yaml prompt is classified 'replace' and the chart "
+        "tools/slots are classified 'defer' in "
+        "docs/aegis_v2/v1_agent_review_checklist.md, so neither is on the live "
+        "V2 path. The V1 prompt now lives at "
+        "archive/v1/aegis-prompts/aegis_agent/system.yaml. Re-enable and "
+        "re-point at the V2-native chart prompt when chart slots are rebuilt."
+    )
+)
 def test_agent_system_prompt_uses_async_chart_slots_for_mixed_metrics() -> None:
     """Broad key-metric comparisons should be requested as async small multiples."""
     prompt = (

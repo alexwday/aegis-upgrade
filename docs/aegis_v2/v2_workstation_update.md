@@ -96,8 +96,9 @@ availability rows.
 
 ## Prompt State
 
-The clean V2 prompt workspace currently exists at `aegis-prompts/`, but it only
-contains placeholder README files. The updater can push prompt YAML as soon as
-those files are added. Until then, use `--allow-empty-prompts` or point
-`--prompts-dir` at `archive/v1/aegis-prompts` if you want to seed the old V1
-prompts for the temporary V2 bridge.
+The V2 orchestrator prompt now exists at
+`aegis-prompts/agent/orchestrator.yaml` (`aegis/agent/orchestrator`), so the
+updater pushes it into `public.prompts` by default — `--allow-empty-prompts` is
+no longer required. The agent also ships an inline copy of this prompt as a
+fallback, so it runs even before the row is pushed; pushing it just makes the
+prompt editable in the database without code changes.

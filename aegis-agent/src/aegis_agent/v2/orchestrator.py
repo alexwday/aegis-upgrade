@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from html import escape
@@ -17,7 +19,15 @@ from .agent.final_response import (
     stream_synthesis,
 )
 from .agent.llm_context import build_llm_context
-from .agent.models import EvidenceChunk, NormalizedTurn, normalize_turn
+from .agent.models import (
+    EvidenceChunk,
+    FinalResponseShell,
+    FinalResponseSummary,
+    FinalResponseTile,
+    NormalizedTurn,
+    evidence_id_for_chunk,
+    normalize_turn,
+)
 from .agent.retrieval import QUICK_SEARCH_CHUNK_LIMIT, retrieve_quick_evidence
 from .agent.tool_agent import (
     AgentDecision,
@@ -40,7 +50,7 @@ from .tools.catalog import optional_context
 from .tools.runtime import load_conversation_context
 
 
-MAX_AGENT_STEPS = 3
+MAX_AGENT_STEPS = 6
 AgentStepStatus = Literal["continue", "complete", "awaiting_user", "error"]
 
 
@@ -60,6 +70,18 @@ class V2SessionState:
     llm_context: dict[str, Any] | None = None
     latest_availability: DataAvailabilityResponse | None = None
     latest_availability_widget_id: str | None = None
+    # Transient per-turn scratch, reset at the start of each agent loop.
+    turn_scratchpad: list[dict[str, Any]] = field(default_factory=list)
+    turn_answer_mode: str | None = None
+    turn_answer_chunks: list[EvidenceChunk] = field(default_factory=list)
+    turn_answer_research: dict[str, Any] | None = None
+    turn_tool_feedback: dict[str, Any] | None = None
+    turn_disposition: AgentStepStatus = "continue"
+    # Per-step streaming state for the live answer body.
+    turn_stream_id: str = ""
+    turn_shell: Any | None = None
+    turn_shell_emitted: bool = False
+    turn_streamed_any: bool = False
 
 
 @dataclass
@@ -363,7 +385,13 @@ async def _stream_final_response(
     chunks: list[EvidenceChunk] | None = None,
     research_result: dict[str, Any] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """Emit final shell, deltas, and one persisted final chat message."""
+    """Synthesis-based final response, wired as the fallback path.
+
+    The live path lets the single agent author the research answer in its own
+    voice, streamed token-by-token (see ``_emit_answer_delta`` / ``_finish_answer``).
+    This separate-synthesis renderer is invoked only when the agent step fails or
+    yields no usable body after research has run (see ``_handle_step_failure``).
+    """
     stream_id = turn.run_uuid or f"stream_{uuid4().hex}"
     shell = build_final_shell(
         turn, mode=mode, chunks=chunks, research_result=research_result
@@ -404,30 +432,229 @@ async def _stream_final_response(
     )
 
 
-async def _run_direct_response(
-    state: V2SessionState, turn: NormalizedTurn, content: str
-) -> AsyncIterator[dict[str, Any]]:
-    """Emit a direct answer from the single agent."""
-    stream_id = turn.run_uuid or f"stream_{uuid4().hex}"
-    yield event(
-        state.session_id,
-        "tool.completed",
-        {
-            "tool_id": f"tool_{uuid4().hex}",
-            "name": "agent_decision",
-            "decision": "direct_response",
-            "model_plan": turn.model_plan.__dict__ if turn.model_plan else {},
-        },
+def _assistant_tool_message(tool_call: AgentToolCall, call_id: str) -> dict[str, Any]:
+    """Reconstruct the assistant tool-call message for the agent scratchpad."""
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.name,
+                    "arguments": json.dumps(tool_call.arguments, default=str),
+                },
+            }
+        ],
+    }
+
+
+def _tool_result_message(call_id: str, payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Build the tool-result message fed back to the agent loop."""
+    content = json.dumps(payload or {}, ensure_ascii=False, default=str)
+    return {"role": "tool", "tool_call_id": call_id, "content": content[:14000]}
+
+
+def _quick_evidence_feedback(
+    chunks: list[EvidenceChunk], gaps: list[str]
+) -> dict[str, Any]:
+    """Build a compact, citation-ready quick-evidence payload for the agent."""
+    evidence: list[dict[str, Any]] = []
+    for chunk in chunks[:24]:
+        location = (
+            f"p.{chunk.page_number}" if chunk.page_number else chunk.sheet_name
+        ) or chunk.section_name
+        period = " ".join(
+            part for part in [chunk.quarter or "", str(chunk.fiscal_year or "")] if part
+        ).strip()
+        evidence.append(
+            {
+                "evidence_id": evidence_id_for_chunk(chunk),
+                "source": chunk.source_display_name,
+                "bank": chunk.bank_ticker,
+                "period": period or None,
+                "location": location,
+                "text": " ".join(chunk.chunk_content.split())[:800],
+            }
+        )
+    return {
+        "mode": "quick",
+        "retained_chunks": len(chunks),
+        "gaps": gaps,
+        "evidence": evidence,
+    }
+
+
+def _deep_research_feedback(research_result: dict[str, Any]) -> dict[str, Any]:
+    """Build a compact deep-research payload for the agent to author from."""
+    findings = research_result.get("findings")
+    gaps = research_result.get("gaps")
+    return {
+        "mode": "deep",
+        "status": research_result.get("status"),
+        "quick_summary": research_result.get("quick_summary"),
+        "findings": findings[:24] if isinstance(findings, list) else [],
+        "gaps": gaps[:24] if isinstance(gaps, list) else [],
+    }
+
+
+def _known_evidence_ids(state: V2SessionState) -> set[str]:
+    """Return the stable evidence ids retrieved this turn for citation validation."""
+    ids: set[str] = {
+        evidence_id_for_chunk(chunk) for chunk in state.turn_answer_chunks
+    }
+    research = state.turn_answer_research or {}
+    findings = research.get("findings")
+    if isinstance(findings, list):
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            refs = finding.get("evidence_refs")
+            if not isinstance(refs, list):
+                continue
+            for ref in refs:
+                if isinstance(ref, dict):
+                    evidence_id = str(ref.get("evidence_id") or "").strip()
+                    if evidence_id:
+                        ids.add(evidence_id)
+    return ids
+
+
+def _shell_from_present_arguments(
+    state: V2SessionState, turn: NormalizedTurn, arguments: dict[str, Any]
+) -> FinalResponseShell:
+    """Build a validated final shell from the agent's present_final_response call.
+
+    Tile evidence ids are filtered against the ids actually retrieved this turn, so
+    hallucinated citations are dropped while the agent-authored values are kept.
+    """
+    known_ids = _known_evidence_ids(state)
+    raw_tiles = arguments.get("tiles") if isinstance(arguments.get("tiles"), list) else []
+    tiles: list[FinalResponseTile] = []
+    for raw_tile in raw_tiles:
+        if not isinstance(raw_tile, dict):
+            continue
+        label = str(raw_tile.get("label") or "").strip()
+        value = str(raw_tile.get("value") or "").strip()
+        if not label or not value:
+            continue
+        context = str(raw_tile.get("context") or "").strip() or None
+        evidence_ids = [
+            evidence_id
+            for evidence_id in _string_list(raw_tile.get("evidence_ids"))
+            if evidence_id in known_ids
+        ]
+        tiles.append(
+            FinalResponseTile(
+                label=label[:40],
+                value=value[:40],
+                context=context,
+                evidence_ids=evidence_ids,
+            )
+        )
+        if len(tiles) >= 4:
+            break
+
+    headline = str(arguments.get("headline") or "").strip() or "Aegis research brief"
+    dek = str(arguments.get("dek") or "").strip() or turn.content[:180] or None
+    return FinalResponseShell(
+        render_mode="custom",
+        summary=FinalResponseSummary(
+            headline=headline, dek=dek, eyebrow="Aegis research brief"
+        ),
+        tiles=tiles,
+        body_style="user_requested_format",
     )
+
+
+async def _open_answer_stream(
+    state: V2SessionState, turn: NormalizedTurn
+) -> AsyncIterator[dict[str, Any]]:
+    """Emit the answer header once, before the first streamed body token.
+
+    Research-backed answers open with a ``final_response.started`` shell; general
+    answers open with a ``tool.completed`` agent-decision marker, matching the V1
+    direct-response contract.
+    """
+    if state.turn_answer_mode in {"quick", "deep"}:
+        state.turn_shell = build_final_shell(
+            turn,
+            mode=state.turn_answer_mode,
+            chunks=state.turn_answer_chunks,
+            research_result=state.turn_answer_research,
+        )
+        yield event(
+            state.session_id,
+            "final_response.started",
+            {
+                "stream_id": state.turn_stream_id,
+                "shell": state.turn_shell.model_dump(mode="json"),
+            },
+        )
+    else:
+        yield event(
+            state.session_id,
+            "tool.completed",
+            {
+                "tool_id": f"tool_{uuid4().hex}",
+                "name": "agent_decision",
+                "decision": "direct_response",
+                "model_plan": turn.model_plan.__dict__ if turn.model_plan else {},
+            },
+        )
+    state.turn_shell_emitted = True
+
+
+async def _emit_answer_delta(
+    state: V2SessionState, turn: NormalizedTurn, text: str
+) -> AsyncIterator[dict[str, Any]]:
+    """Stream one body token live, opening the answer header on the first token."""
+    if not state.turn_shell_emitted:
+        async for item in _open_answer_stream(state, turn):
+            yield item
+    state.turn_streamed_any = True
     yield event(
         state.session_id,
         "chat.delta",
-        {"stream_id": stream_id, "role": "assistant", "content": content},
+        {"stream_id": state.turn_stream_id, "role": "assistant", "content": text},
     )
+
+
+async def _finish_answer(
+    state: V2SessionState, turn: NormalizedTurn, content: str
+) -> AsyncIterator[dict[str, Any]]:
+    """Persist the agent's final message after the body has streamed."""
+    body = content.strip()
+    research_backed = state.turn_answer_mode in {"quick", "deep"}
+
+    if not body and research_backed:
+        # The agent produced no usable body: fall back to synthesis rendering.
+        async for item in _stream_final_response(
+            state,
+            turn,
+            mode=state.turn_answer_mode,
+            chunks=state.turn_answer_chunks,
+            research_result=state.turn_answer_research,
+        ):
+            yield item
+        return
+
+    # If nothing streamed live (e.g. a non-streaming agent step), emit the body now.
+    if not state.turn_streamed_any:
+        async for item in _emit_answer_delta(state, turn, body):
+            yield item
+
+    if state.turn_shell is not None:
+        persisted_content = final_shell_marker(state.turn_shell) + body
+    else:
+        persisted_content = body
     yield event(
         state.session_id,
         "chat.message",
-        _message_payload("assistant", content, stream_id=stream_id, final=True),
+        _message_payload(
+            "assistant", persisted_content, stream_id=state.turn_stream_id, final=True
+        ),
     )
 
 
@@ -593,7 +820,13 @@ async def _run_clarification_turn(
 async def _run_quick_research_turn(
     state: V2SessionState, turn: NormalizedTurn
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run quick evidence retrieval, create an artifact, then stream synthesis."""
+    """Retrieve quick evidence and create an artifact; the agent authors the answer.
+
+    Stores the retained evidence on the session so the single agent can read it
+    back and write the final answer in its own voice. Synthesis is no longer a
+    separate LLM call; this helper only retrieves and reports.
+    """
+    state.turn_disposition = "continue"
     missing = _missing_research_scope(turn)
     if missing:
         async for item in _run_clarification_turn(
@@ -604,6 +837,7 @@ async def _run_quick_research_turn(
             options=[],
         ):
             yield item
+        state.turn_disposition = "awaiting_user"
         return
 
     tool_id = f"tool_{uuid4().hex}"
@@ -633,6 +867,7 @@ async def _run_quick_research_turn(
             "chat.message",
             _message_payload("assistant", f"Quick search failed: {exc}"),
         )
+        state.turn_disposition = "error"
         return
     yield event(
         state.session_id,
@@ -669,32 +904,17 @@ async def _run_quick_research_turn(
             "artifact_id": artifact.id,
         },
     )
-    try:
-        async for item in _stream_final_response(
-            state, turn, mode="quick", chunks=result.chunks
-        ):
-            yield item
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        yield event(
-            state.session_id,
-            "tool.failed",
-            {
-                "tool_id": tool_id,
-                "name": "quick_research_response",
-                "error": str(exc),
-            },
-        )
-        yield event(
-            state.session_id,
-            "chat.message",
-            _message_payload("assistant", f"Quick search response failed: {exc}"),
-        )
+    state.turn_answer_mode = "quick"
+    state.turn_answer_chunks = result.chunks
+    state.turn_answer_research = None
+    state.turn_tool_feedback = _quick_evidence_feedback(result.chunks, result.gaps)
 
 
 async def _run_deep_research_turn(
     state: V2SessionState, turn: NormalizedTurn
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run scoped deep research, create an artifact, then stream synthesis."""
+    """Run scoped deep research and create an artifact; the agent authors the answer."""
+    state.turn_disposition = "continue"
     if not has_deep_scope(turn):
         yield event(
             state.session_id,
@@ -705,6 +925,7 @@ async def _run_deep_research_turn(
                 "Set those in optional context, then send the query again.",
             ),
         )
+        state.turn_disposition = "complete"
         return
 
     tool_id = f"tool_{uuid4().hex}"
@@ -731,6 +952,7 @@ async def _run_deep_research_turn(
             "chat.message",
             _message_payload("assistant", f"Deep search failed: {exc}"),
         )
+        state.turn_disposition = "error"
         return
 
     gaps: list[str] = []
@@ -769,30 +991,10 @@ async def _run_deep_research_turn(
             "artifact_id": artifact.id,
         },
     )
-    try:
-        async for item in _stream_final_response(
-            state,
-            turn,
-            mode="deep",
-            chunks=[],
-            research_result=research_result,
-        ):
-            yield item
-    except Exception as exc:  # pylint: disable=broad-exception-caught
-        yield event(
-            state.session_id,
-            "tool.failed",
-            {
-                "tool_id": tool_id,
-                "name": "deep_research_response",
-                "error": str(exc),
-            },
-        )
-        yield event(
-            state.session_id,
-            "chat.message",
-            _message_payload("assistant", f"Deep search response failed: {exc}"),
-        )
+    state.turn_answer_mode = "deep"
+    state.turn_answer_chunks = []
+    state.turn_answer_research = research_result
+    state.turn_tool_feedback = _deep_research_feedback(research_result)
 
 
 async def run_turn(
@@ -819,7 +1021,24 @@ async def run_turn(
 async def _run_agent_loop(
     state: V2SessionState, turn: NormalizedTurn
 ) -> AsyncIterator[dict[str, Any]]:
-    """Run bounded V2 single-agent tool-choice steps for one user turn."""
+    """Run bounded V2 single-agent tool-choice steps for one user turn.
+
+    The agent reads tool results back through ``state.turn_scratchpad`` and
+    continues the same conversation, so research is no longer turn-terminal: the
+    agent that reads the evidence authors the final answer in its own voice.
+    """
+    state.turn_scratchpad = []
+    state.turn_answer_mode = None
+    state.turn_answer_chunks = []
+    state.turn_answer_research = None
+    state.turn_tool_feedback = None
+    state.turn_disposition = "continue"
+    # Answer-stream state is turn-scoped: one answer per turn, but it may span a
+    # present_final_response step and the body step, so it must not reset per step.
+    state.turn_stream_id = turn.run_uuid or f"stream_{uuid4().hex}"
+    state.turn_shell = None
+    state.turn_shell_emitted = False
+    state.turn_streamed_any = False
     for step_index in range(MAX_AGENT_STEPS):
         if state.llm_context is None:
             try:
@@ -847,27 +1066,14 @@ async def _run_agent_loop(
                 return
 
         try:
-            decision = await run_agent_step(
-                turn, state.conversation_context, state.llm_context
-            )
+            async for item in _run_streaming_step(state, turn):
+                if "decision" in item:
+                    decision = item["decision"]
+                else:
+                    yield item["event"]
         except Exception as exc:  # pylint: disable=broad-exception-caught
-            yield event(
-                state.session_id,
-                "tool.failed",
-                {
-                    "tool_id": f"tool_{uuid4().hex}",
-                    "name": "agent_step",
-                    "error": str(exc),
-                    "agent_step": step_index,
-                },
-            )
-            yield event(
-                state.session_id,
-                "chat.message",
-                _message_payload(
-                    "assistant", f"Aegis could not decide the next step: {exc}"
-                ),
-            )
+            async for item in _handle_step_failure(state, turn, exc, step_index):
+                yield item
             return
 
         outcome = AgentStepOutcome()
@@ -899,6 +1105,88 @@ async def _run_agent_loop(
     )
 
 
+async def _run_streaming_step(
+    state: V2SessionState, turn: NormalizedTurn
+) -> AsyncIterator[dict[str, Any]]:
+    """Run one streamed agent step, emitting live body deltas and the decision.
+
+    Yields ``{"event": ...}`` for each streamed ``chat.delta`` (and its answer
+    header) and a final ``{"decision": AgentDecision}``. Bridges the agent step's
+    ``on_delta`` callback through a queue so tokens reach the UI as they arrive.
+    """
+    delta_queue: asyncio.Queue[str] = asyncio.Queue()
+
+    def _on_delta(text: str) -> None:
+        delta_queue.put_nowait(text)
+
+    step_task = asyncio.create_task(
+        run_agent_step(
+            turn,
+            state.conversation_context,
+            state.llm_context,
+            scratchpad=state.turn_scratchpad,
+            on_delta=_on_delta,
+        )
+    )
+
+    while not (step_task.done() and delta_queue.empty()):
+        get_task = asyncio.create_task(delta_queue.get())
+        done, _pending = await asyncio.wait(
+            {step_task, get_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if get_task in done:
+            text = get_task.result()
+            async for item in _emit_answer_delta(state, turn, text):
+                yield {"event": item}
+        else:
+            get_task.cancel()
+            try:
+                await get_task
+            except asyncio.CancelledError:
+                pass
+
+    while not delta_queue.empty():
+        text = delta_queue.get_nowait()
+        async for item in _emit_answer_delta(state, turn, text):
+            yield {"event": item}
+
+    yield {"decision": step_task.result()}
+
+
+async def _handle_step_failure(
+    state: V2SessionState, turn: NormalizedTurn, exc: Exception, step_index: int
+) -> AsyncIterator[dict[str, Any]]:
+    """Recover from an agent-step failure, falling back to synthesis after research."""
+    if (
+        state.turn_answer_mode in {"quick", "deep"}
+        and not state.turn_shell_emitted
+    ):
+        async for item in _stream_final_response(
+            state,
+            turn,
+            mode=state.turn_answer_mode,
+            chunks=state.turn_answer_chunks,
+            research_result=state.turn_answer_research,
+        ):
+            yield item
+        return
+    yield event(
+        state.session_id,
+        "tool.failed",
+        {
+            "tool_id": f"tool_{uuid4().hex}",
+            "name": "agent_step",
+            "error": str(exc),
+            "agent_step": step_index,
+        },
+    )
+    yield event(
+        state.session_id,
+        "chat.message",
+        _message_payload("assistant", f"Aegis could not decide the next step: {exc}"),
+    )
+
+
 async def _run_agent_decision(
     state: V2SessionState,
     turn: NormalizedTurn,
@@ -909,10 +1197,10 @@ async def _run_agent_decision(
 ) -> AsyncIterator[dict[str, Any]]:
     """Execute one single-agent direct answer or tool call."""
     if decision.kind == "direct":
-        async for item in _run_direct_response(state, turn, decision.content):
+        async for item in _finish_answer(state, turn, decision.content):
             yield item
         outcome.status = "complete"
-        outcome.reason = "direct_response_completed"
+        outcome.reason = "answer_completed"
         return
 
     if decision.tool_call is None:
@@ -950,6 +1238,38 @@ async def _run_agent_tool_call(
 ) -> AsyncIterator[dict[str, Any]]:
     """Execute one tool selected by the single agent."""
     arguments = tool_call.arguments
+
+    if tool_call.name == "present_final_response":
+        shell = _shell_from_present_arguments(state, turn, arguments)
+        if not state.turn_shell_emitted:
+            state.turn_shell = shell
+            yield event(
+                state.session_id,
+                "final_response.started",
+                {
+                    "stream_id": state.turn_stream_id,
+                    "shell": shell.model_dump(mode="json"),
+                },
+            )
+            state.turn_shell_emitted = True
+        call_id = tool_call.id or f"call_{uuid4().hex}"
+        state.turn_scratchpad.append(_assistant_tool_message(tool_call, call_id))
+        state.turn_scratchpad.append(
+            _tool_result_message(
+                call_id,
+                {
+                    "status": "shell_accepted",
+                    "instruction": (
+                        "Header accepted. Now write the analyst brief body as "
+                        "markdown, citing source-backed claims with the exact "
+                        "[[source:chunk_id]] evidence ids. Do not call more tools."
+                    ),
+                },
+            )
+        )
+        outcome.status = "continue"
+        outcome.reason = "final_response_presented"
+        return
 
     if tool_call.name == "check_data_availability":
         availability_turn = _availability_turn_from_arguments(turn, arguments)
@@ -1008,8 +1328,21 @@ async def _run_agent_tool_call(
         else:
             async for item in _run_quick_research_turn(state, research_turn):
                 yield item
-        outcome.status = "complete"
-        outcome.reason = "research_completed"
+
+        if state.turn_disposition != "continue":
+            outcome.status = state.turn_disposition
+            outcome.reason = f"research_{state.turn_disposition}"
+            return
+
+        # Research succeeded: feed the evidence back so the same agent authors
+        # the final answer in its own voice on the next loop step.
+        call_id = tool_call.id or f"call_{uuid4().hex}"
+        state.turn_scratchpad.append(_assistant_tool_message(tool_call, call_id))
+        state.turn_scratchpad.append(
+            _tool_result_message(call_id, state.turn_tool_feedback)
+        )
+        outcome.status = "continue"
+        outcome.reason = "research_completed_pending_answer"
         return
 
     yield event(

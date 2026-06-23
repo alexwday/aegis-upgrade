@@ -10,6 +10,7 @@ from aegis_agent.model.agents.research import (
     _aggregate_results,
     _merge_latest_research_result,
     _result_from_document_raw,
+    check_source_availability,
     run_research_tool,
 )
 from aegis_agent.model.agents.schemas import (
@@ -566,3 +567,50 @@ async def test_run_research_summarizes_completed_source_while_others_continue(
 
     result = await asyncio.wait_for(task, timeout=1.0)
     assert result["status"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_check_source_availability_uses_injected_v2_index(monkeypatch) -> None:
+    """The V2 deep path splits combos from the injected catalog index, not the DB."""
+
+    def fail_connection(*_args, **_kwargs):
+        raise AssertionError("V2 path must not query aegis_data_availability")
+
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.research.get_connection", fail_connection
+    )
+
+    context = {
+        "execution_id": "test",
+        "v2_available_combinations": {
+            ("transcripts", 2026, "Q1"): {"td-ca"},
+        },
+    }
+    available, unavailable = await check_source_availability(
+        "transcripts", [_combo("TD-CA"), _combo("RY-CA")], context
+    )
+
+    assert [combo.bank_symbol for combo in available] == ["TD-CA"]
+    assert [combo.bank_symbol for combo in unavailable] == ["RY-CA"]
+
+
+@pytest.mark.asyncio
+async def test_check_source_availability_empty_v2_index_marks_all_unavailable(
+    monkeypatch,
+) -> None:
+    """An empty injected index degrades to all-unavailable without a DB call."""
+
+    def fail_connection(*_args, **_kwargs):
+        raise AssertionError("V2 path must not query aegis_data_availability")
+
+    monkeypatch.setattr(
+        "aegis_agent.model.agents.research.get_connection", fail_connection
+    )
+
+    context = {"execution_id": "test", "v2_available_combinations": {}}
+    available, unavailable = await check_source_availability(
+        "transcripts", [_combo("TD-CA")], context
+    )
+
+    assert available == []
+    assert [combo.bank_symbol for combo in unavailable] == ["TD-CA"]

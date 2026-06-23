@@ -61,4 +61,5 @@ research workstation instead of improvising the product shape turn by turn.
 - [Retrieval Tooling Plan](./retrieval_tooling_plan.md)
 - [V2 Runtime API Contract](./v2_api_contract.md)
 - [V2 Workstation Update Script](./v2_workstation_update.md)
+- [V2 Agent Rebuild Plan (Phases 1-4)](./v2_agent_rebuild_plan.md)
 - [Runtime Schema Field Map](./aegis_runtime_schema_field_map.xlsx)
