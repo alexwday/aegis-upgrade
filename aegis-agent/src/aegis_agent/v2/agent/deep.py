@@ -95,7 +95,7 @@ async def run_deep_research(
     context = llm_context or await build_llm_context(
         turn.run_uuid or "v2-deep-research", "deep research"
     )
-    context.setdefault("source_filter", turn.source_ids)
-    context.setdefault("v2_model_plan", turn.model_plan)
+    context["source_filter"] = turn.source_ids
+    context["v2_model_plan"] = turn.model_plan
     context["v2_available_combinations"] = await resolve_v2_availability(turn)
     return await run_research_tool(research_arguments(turn), context)

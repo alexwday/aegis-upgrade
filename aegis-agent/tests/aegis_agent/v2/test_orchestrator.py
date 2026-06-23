@@ -17,7 +17,9 @@ from aegis_agent.v2.agent.tool_agent import AgentDecision, AgentToolCall
 from aegis_agent.v2.orchestrator import (
     MAX_AGENT_STEPS,
     V2SessionState,
+    _quick_evidence_feedback,
     _run_quick_research_turn,
+    _tool_result_message,
     event,
     run_turn,
 )
@@ -849,6 +851,34 @@ def _research_tool_decision() -> AgentDecision:
             },
         ),
     )
+
+
+def test_quick_feedback_returns_full_sixty_chunk_budget() -> None:
+    """Quick research should feed all retained chunks back to the agent compactly."""
+    from aegis_agent.v2.agent.models import EvidenceChunk
+
+    chunks = [
+        EvidenceChunk(
+            source_name="rts",
+            source_display_name="Reports to shareholders",
+            bank_ticker="RY",
+            fiscal_year=2026,
+            quarter="Q1",
+            page_number=index + 1,
+            chunk_id=f"chunk-{index}",
+            chunk_content=" ".join(["capital"] * 80),
+        )
+        for index in range(60)
+    ]
+
+    feedback = _quick_evidence_feedback(chunks, [])
+    message = _tool_result_message("call_1", feedback)
+
+    assert feedback["retained_chunks"] == 60
+    assert len(feedback["evidence"]) == 60
+    assert feedback["evidence"][-1]["evidence_id"] == "rts:chunk-59"
+    assert len(feedback["evidence"][0]["text"]) <= 320
+    assert "rts:chunk-59" in message["content"]
 
 
 @pytest.mark.asyncio

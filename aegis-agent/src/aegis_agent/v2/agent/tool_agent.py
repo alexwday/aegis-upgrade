@@ -42,6 +42,8 @@ FALLBACK_SYSTEM_PROMPT = (
     "- Honor explicit_source_filter as the maximum allowed source scope. If "
     "explicit_source_filter is absent, no datasource filter was selected; all "
     "supported sources are simply available by default.\n"
+    "- For quick search, choose only the 2-3 most relevant source_ids for "
+    "run_research. Deep search may use broader multi-source scope when requested.\n"
     "- Optional context is truly optional. Only use bank, fiscal-year, quarter, "
     "or category context when optional_context is present in the turn payload. "
     "Do not tell the user they selected context when optional_context is "
@@ -81,6 +83,8 @@ RUNTIME_SYSTEM_RULES = (
     "contains an explicit_source_filter field. If it is absent, no datasource "
     "filter was selected and all supported sources are merely available by "
     "default.\n"
+    "- For quick run_research calls, pass only the 2-3 most relevant source_ids. "
+    "Deep run_research calls may use broader multi-source scope.\n"
     "- Optional context is truly optional. Only use bank, fiscal-year, quarter, "
     "or category context when the turn payload contains optional_context. Do not "
     "tell the user they selected context when optional_context is absent.\n"
@@ -235,6 +239,10 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "properties": {
                     "source_ids": {
                         "type": "array",
+                        "description": (
+                            "For quick search, include only the 2-3 most relevant "
+                            "sources. Deep search may include a broader source scope."
+                        ),
                         "items": {
                             "type": "string",
                             "enum": [

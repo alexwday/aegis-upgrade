@@ -13,7 +13,10 @@ from .llm_context import build_llm_context
 from .models import EvidenceChunk, NormalizedTurn
 
 
-QUICK_SEARCH_CHUNK_LIMIT = 80
+QUICK_SEARCH_CHUNK_LIMIT = 60
+QUICK_SEARCH_MAX_COMBINATIONS = 12
+QUICK_SEARCH_MAX_SOURCES = 3
+QUICK_SEARCH_MAX_CHUNKS_PER_COMBO = 20
 
 
 @dataclass(frozen=True)
@@ -150,9 +153,18 @@ def _chunk_from_standard_record(
 async def _research_context(turn: NormalizedTurn) -> dict[str, Any]:
     """Build strict LLM context for quick retrieval."""
     context = await build_llm_context(turn.run_uuid or "v2-quick-research", "quick search")
-    context["source_filter"] = turn.source_ids
-    context["v2_model_plan"] = turn.model_plan
+    _stamp_research_context(context, turn)
     return context
+
+
+def _stamp_research_context(
+    context: dict[str, Any],
+    turn: NormalizedTurn,
+    source_ids: list[str] | None = None,
+) -> None:
+    """Attach per-turn research settings to a shared LLM context."""
+    context["source_filter"] = source_ids or turn.source_ids
+    context["v2_model_plan"] = turn.model_plan
 
 
 def _bank_period_combinations(turn: NormalizedTurn) -> list[dict[str, Any]]:
@@ -171,6 +183,19 @@ def _bank_period_combinations(turn: NormalizedTurn) -> list[dict[str, Any]]:
         for year in turn.fiscal_years
         for quarter in turn.quarters
     ]
+
+
+def _quick_source_ids(source_ids: list[str]) -> list[str]:
+    """Return the bounded source set used by quick search."""
+    return source_ids[:QUICK_SEARCH_MAX_SOURCES]
+
+
+def _combo_budget(combo_count: int, limit: int) -> int:
+    """Return the per-combo quick evidence budget."""
+    return min(
+        QUICK_SEARCH_MAX_CHUNKS_PER_COMBO,
+        max(1, limit // max(combo_count, 1)),
+    )
 
 
 def _pipeline_module(source_id: str) -> Any:
@@ -230,38 +255,6 @@ async def _strict_prepare_query(
     return prepared
 
 
-async def _strict_rerank_candidates(
-    module: Any,
-    *,
-    query: str,
-    combo: dict[str, Any],
-    candidates: list[dict[str, Any]],
-    context: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """Run V1 metadata reranking without keep-all fallback."""
-    if not candidates:
-        return []
-    parsed, _usage = await module.call_tool_prompt(
-        prompt_name="rerank",
-        replacements={
-            "user_input": query,
-            "research_scope": module.format_scope([combo]),
-            "candidates": module.format_rerank_candidates(candidates),
-        },
-        context=context,
-        max_tokens=800,
-    )
-    valid_remove = module.normalize_remove_indices(
-        parsed.get("remove_indices", []), len(candidates)
-    )
-    valid_remove = module.apply_min_keep_floor(candidates, valid_remove)
-    return [
-        candidate
-        for index, candidate in enumerate(candidates)
-        if index not in valid_remove
-    ]
-
-
 async def _gap_fill_chunks(
     module: Any,
     chunks: list[dict[str, Any]],
@@ -278,48 +271,157 @@ async def _gap_fill_chunks(
     )
 
 
-async def _retrieve_mature_source(
+async def _retrieve_source_combo_candidates(
     source_id: str,
-    turn: NormalizedTurn,
+    combo: dict[str, Any],
     *,
-    combinations: list[dict[str, Any]],
+    prepared: dict[str, Any],
     context: dict[str, Any],
     search_top_k: int,
-) -> list[EvidenceChunk]:
-    """Run V1 query prep, hybrid search, rerank, and gap-fill without research."""
+) -> list[dict[str, Any]]:
+    """Run one source's V1 hybrid search for one bank-period combo."""
     module = _pipeline_module(source_id)
-    prepared = await _strict_prepare_query(module, turn, combinations, context)
     search_semaphore = asyncio.Semaphore(module.MAX_PARALLEL_SEARCH_QUERIES)
-    query_terms = _terms(turn.content)
-    chunks: list[EvidenceChunk] = []
-    for combo in combinations:
-        candidates = await module.multi_strategy_search(
-            combo=combo,
-            prepared=prepared,
-            top_k=search_top_k,
-            search_semaphore=search_semaphore,
-        )
-        rerank_pool = candidates[: module.RERANK_CANDIDATE_LIMIT]
-        if len(candidates) > search_top_k:
-            reranked = await _strict_rerank_candidates(
-                module,
-                query=prepared["rewritten_query"],
-                combo=combo,
-                candidates=rerank_pool,
-                context=context,
-            )
-        else:
-            reranked = candidates
-        reranked = reranked[:search_top_k]
-        expanded = await _gap_fill_chunks(
-            module, reranked, search_semaphore=search_semaphore
-        )
-        expanded = module.cap_gap_filled_chunks(expanded, reranked, search_top_k)
-        chunks.extend(
-            _chunk_from_standard_record(source_id, chunk, query_terms)
-            for chunk in expanded
-        )
+    candidates = await module.multi_strategy_search(
+        combo=combo,
+        prepared=prepared,
+        top_k=search_top_k,
+        search_semaphore=search_semaphore,
+    )
+    anchors = candidates[:search_top_k]
+    expanded = await _gap_fill_chunks(
+        module, anchors, search_semaphore=search_semaphore
+    )
+    expanded = module.cap_gap_filled_chunks(expanded, anchors, search_top_k)
+    chunks: list[dict[str, Any]] = []
+    for chunk in expanded:
+        normalized = dict(chunk)
+        normalized["_quick_source_id"] = source_id
+        chunks.append(normalized)
     return chunks
+
+
+async def _retrieve_combo_candidates(
+    source_ids: list[str],
+    combo: dict[str, Any],
+    *,
+    prepared: dict[str, Any],
+    context: dict[str, Any],
+    search_top_k: int,
+) -> list[dict[str, Any]]:
+    """Retrieve the top quick candidates for one combo across all selected sources."""
+    source_results = await asyncio.gather(
+        *[
+            _retrieve_source_combo_candidates(
+                source_id,
+                combo,
+                prepared=prepared,
+                context=context,
+                search_top_k=search_top_k,
+            )
+            for source_id in source_ids
+        ]
+    )
+    candidates = [candidate for rows in source_results for candidate in rows]
+    return _cap_raw_candidates_by_combo(
+        _rank_raw_candidates(candidates),
+        per_combo_limit=search_top_k,
+        total_limit=search_top_k,
+    )
+
+
+def _raw_source_id(candidate: dict[str, Any]) -> str:
+    """Return the quick source id stamped onto a raw candidate."""
+    return str(candidate.get("_quick_source_id") or "")
+
+
+def _candidate_dedupe_key(candidate: dict[str, Any]) -> tuple[str, str, str]:
+    """Return a source-aware raw candidate key."""
+    return (
+        _raw_source_id(candidate),
+        str(candidate.get("file_id") or ""),
+        str(candidate.get("chunk_id") or ""),
+    )
+
+
+def _combo_key_from_candidate(candidate: dict[str, Any]) -> tuple[str, str, str]:
+    """Return the bank-period key for per-combo quick caps."""
+    return (
+        str(candidate.get("bank") or ""),
+        str(candidate.get("fiscal_year") or ""),
+        str(candidate.get("quarter") or "").upper(),
+    )
+
+
+def _rank_raw_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Dedupe and rank quick candidates using fused V1 scores."""
+    deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for candidate in candidates:
+        key = _candidate_dedupe_key(candidate)
+        existing = deduped.get(key)
+        if existing is None or _record_score(candidate, 0.0) > _record_score(
+            existing, 0.0
+        ):
+            deduped[key] = candidate
+    return sorted(
+        deduped.values(),
+        key=lambda candidate: (
+            _record_score(candidate, 0.0),
+            str(candidate.get("fiscal_year") or ""),
+            str(candidate.get("quarter") or ""),
+            _raw_source_id(candidate),
+        ),
+        reverse=True,
+    )
+
+
+def _cap_raw_candidates_by_combo(
+    candidates: list[dict[str, Any]], *, per_combo_limit: int, total_limit: int
+) -> list[dict[str, Any]]:
+    """Apply per-combo and total quick evidence budgets."""
+    selected: list[dict[str, Any]] = []
+    combo_counts: dict[tuple[str, str, str], int] = {}
+    for candidate in candidates:
+        combo_key = _combo_key_from_candidate(candidate)
+        if combo_counts.get(combo_key, 0) >= per_combo_limit:
+            continue
+        selected.append(candidate)
+        combo_counts[combo_key] = combo_counts.get(combo_key, 0) + 1
+        if len(selected) >= total_limit:
+            break
+    return selected
+
+
+async def _strict_rerank_merged_candidates(
+    module: Any,
+    *,
+    query: str,
+    combinations: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Run one metadata rerank pass after quick candidates are merged."""
+    if not candidates:
+        return []
+    parsed, _usage = await module.call_tool_prompt(
+        prompt_name="rerank",
+        replacements={
+            "user_input": query,
+            "research_scope": module.format_scope(combinations),
+            "candidates": module.format_rerank_candidates(candidates),
+        },
+        context=context,
+        max_tokens=1200,
+    )
+    valid_remove = module.normalize_remove_indices(
+        parsed.get("remove_indices", []), len(candidates)
+    )
+    valid_remove = module.apply_min_keep_floor(candidates, valid_remove)
+    return [
+        candidate
+        for index, candidate in enumerate(candidates)
+        if index not in valid_remove
+    ]
 
 
 async def retrieve_quick_evidence(
@@ -328,36 +430,56 @@ async def retrieve_quick_evidence(
     llm_context: dict[str, Any] | None = None,
 ) -> RetrievalResult:
     """Retrieve and rank quick-search chunks using mature V1 retrieval primitives."""
-    selected_sources = turn.source_ids
+    selected_sources = _quick_source_ids(turn.source_ids)
     if not selected_sources:
         raise RuntimeError("Quick search requires at least one selected data source.")
     combinations = _bank_period_combinations(turn)
-    context = llm_context or await _research_context(turn)
-    context.setdefault("source_filter", turn.source_ids)
-    context.setdefault("v2_model_plan", turn.model_plan)
-    per_source_limit = max(
-        8, min(limit, (limit // max(len(selected_sources) * len(combinations), 1)) + 8)
-    )
-    all_chunks: list[EvidenceChunk] = []
-    for source_id in selected_sources:
-        all_chunks.extend(
-            await _retrieve_mature_source(
-                source_id,
-                turn,
-                combinations=combinations,
-                context=context,
-                search_top_k=per_source_limit,
-            )
+    if len(combinations) > QUICK_SEARCH_MAX_COMBINATIONS:
+        raise RuntimeError(
+            "Quick search supports up to 12 bank-period combinations. "
+            "Use fewer banks/periods or switch to deep search."
         )
-
-    ranked = sorted(
-        all_chunks,
-        key=lambda chunk: (
-            float(chunk.score or 0),
-            chunk.fiscal_year or 0,
-            chunk.quarter or "",
-            chunk.source_name,
-        ),
-        reverse=True,
+    context = llm_context or await _research_context(turn)
+    _stamp_research_context(context, turn, selected_sources)
+    per_combo_limit = _combo_budget(len(combinations), limit)
+    prep_module = _pipeline_module(selected_sources[0])
+    prepared = await _strict_prepare_query(prep_module, turn, combinations, context)
+    combo_results = await asyncio.gather(
+        *[
+            _retrieve_combo_candidates(
+                selected_sources,
+                combo,
+                prepared=prepared,
+                context=context,
+                search_top_k=per_combo_limit,
+            )
+            for combo in combinations
+        ]
     )
-    return RetrievalResult(chunks=ranked[:limit], gaps=[])
+    all_candidates = [candidate for rows in combo_results for candidate in rows]
+
+    merged = _cap_raw_candidates_by_combo(
+        _rank_raw_candidates(all_candidates),
+        per_combo_limit=per_combo_limit,
+        total_limit=limit,
+    )
+    reranked = await _strict_rerank_merged_candidates(
+        prep_module,
+        query=prepared["rewritten_query"],
+        combinations=combinations,
+        candidates=merged,
+        context=context,
+    )
+    capped = _cap_raw_candidates_by_combo(
+        reranked,
+        per_combo_limit=per_combo_limit,
+        total_limit=limit,
+    )
+    query_terms = _terms(turn.content)
+    return RetrievalResult(
+        chunks=[
+            _chunk_from_standard_record(_raw_source_id(candidate), candidate, query_terms)
+            for candidate in capped
+        ],
+        gaps=[],
+    )

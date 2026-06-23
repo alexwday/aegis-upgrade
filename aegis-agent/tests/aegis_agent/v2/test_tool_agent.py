@@ -8,7 +8,7 @@ import pytest
 
 import aegis_agent.v2.agent.tool_agent as tool_agent_module
 from aegis_agent.v2.agent.conversation import ConversationContext
-from aegis_agent.v2.agent.models import normalize_turn
+from aegis_agent.v2.agent.models import normalize_turn, resolve_model_plan
 from aegis_agent.v2.agent.tool_agent import (
     FALLBACK_SYSTEM_PROMPT,
     RUNTIME_SYSTEM_RULES,
@@ -73,8 +73,9 @@ async def test_run_agent_step_streams_direct_answer(monkeypatch) -> None:
         fake_stream_with_tools,
     )
 
+    turn = normalize_turn({"content": "hi"})
     decision = await run_agent_step(
-        normalize_turn({"content": "hi"}),
+        turn,
         ConversationContext(),
         llm_context={"execution_id": "test"},
         on_delta=deltas.append,
@@ -94,6 +95,36 @@ async def test_run_agent_step_streams_direct_answer(monkeypatch) -> None:
         "present_final_response",
     }
     assert captured["llm_params"]["tool_choice"] == "auto"  # type: ignore[index]
+    assert (
+        captured["llm_params"]["model"] == turn.model_plan.orchestrator_model  # type: ignore[index]
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_step_uses_large_ui_orchestrator_model(monkeypatch) -> None:
+    """The UI Large mode should pass the configured large model to the agent call."""
+    captured: dict[str, object] = {}
+
+    async def fake_stream_with_tools(_messages, _tools, _context, llm_params):
+        captured["llm_params"] = llm_params
+        yield _content_chunk("ok")
+
+    monkeypatch.setattr(
+        "aegis_agent.v2.agent.tool_agent.stream_with_tools",
+        fake_stream_with_tools,
+    )
+
+    turn = normalize_turn({"content": "hi", "model_selection": "large"})
+    await run_agent_step(
+        turn,
+        ConversationContext(),
+        llm_context={"execution_id": "test"},
+    )
+
+    assert (
+        captured["llm_params"]["model"]  # type: ignore[index]
+        == resolve_model_plan("large").orchestrator_model
+    )
 
 
 @pytest.mark.asyncio

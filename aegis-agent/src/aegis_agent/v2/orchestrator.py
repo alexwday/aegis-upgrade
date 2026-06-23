@@ -28,7 +28,11 @@ from .agent.models import (
     evidence_id_for_chunk,
     normalize_turn,
 )
-from .agent.retrieval import QUICK_SEARCH_CHUNK_LIMIT, retrieve_quick_evidence
+from .agent.retrieval import (
+    QUICK_SEARCH_CHUNK_LIMIT,
+    QUICK_SEARCH_MAX_SOURCES,
+    retrieve_quick_evidence,
+)
 from .agent.tool_agent import (
     AgentDecision,
     AgentToolCall,
@@ -51,6 +55,7 @@ from .tools.runtime import load_conversation_context
 
 
 MAX_AGENT_STEPS = 6
+TOOL_RESULT_CONTENT_LIMIT = 40000
 AgentStepStatus = Literal["continue", "complete", "awaiting_user", "error"]
 
 
@@ -121,6 +126,17 @@ def _reset_turn_state(state: V2SessionState, turn: NormalizedTurn) -> None:
     state.turn_shell_emitted = False
     state.turn_streamed_any = False
     state.turn_streamed_text = ""
+    _stamp_llm_context_for_turn(state, turn)
+
+
+def _stamp_llm_context_for_turn(
+    state: V2SessionState, turn: NormalizedTurn
+) -> None:
+    """Attach current UI model/source settings to the shared LLM context."""
+    if state.llm_context is None:
+        return
+    state.llm_context["v2_model_plan"] = turn.model_plan
+    state.llm_context["source_filter"] = turn.source_ids
 
 
 def _missing_research_scope(turn: NormalizedTurn) -> list[str]:
@@ -230,8 +246,10 @@ def _research_turn_from_arguments(
         bank_values.append(combo.get("bank_symbol"))
         fiscal_year_values.append(combo.get("fiscal_year"))
         quarter_values.append(combo.get("quarter"))
-    source_ids = normalize_source_ids(arguments.get("source_ids") or turn.source_ids)
     search_mode = str(arguments.get("search_mode") or turn.search_mode).lower()
+    source_ids = normalize_source_ids(arguments.get("source_ids") or turn.source_ids)
+    if search_mode != "deep":
+        source_ids = source_ids[:QUICK_SEARCH_MAX_SOURCES]
     return replace(
         turn,
         content=str(arguments.get("question") or turn.content).strip(),
@@ -480,7 +498,11 @@ def _assistant_tool_message(tool_call: AgentToolCall, call_id: str) -> dict[str,
 def _tool_result_message(call_id: str, payload: dict[str, Any] | None) -> dict[str, Any]:
     """Build the tool-result message fed back to the agent loop."""
     content = json.dumps(payload or {}, ensure_ascii=False, default=str)
-    return {"role": "tool", "tool_call_id": call_id, "content": content[:14000]}
+    return {
+        "role": "tool",
+        "tool_call_id": call_id,
+        "content": content[:TOOL_RESULT_CONTENT_LIMIT],
+    }
 
 
 def _quick_evidence_feedback(
@@ -488,7 +510,7 @@ def _quick_evidence_feedback(
 ) -> dict[str, Any]:
     """Build a compact, citation-ready quick-evidence payload for the agent."""
     evidence: list[dict[str, Any]] = []
-    for chunk in chunks[:24]:
+    for chunk in chunks[:QUICK_SEARCH_CHUNK_LIMIT]:
         location = (
             f"p.{chunk.page_number}" if chunk.page_number else chunk.sheet_name
         ) or chunk.section_name
@@ -502,7 +524,7 @@ def _quick_evidence_feedback(
                 "bank": chunk.bank_ticker,
                 "period": period or None,
                 "location": location,
-                "text": " ".join(chunk.chunk_content.split())[:800],
+                "text": " ".join(chunk.chunk_content.split())[:320],
             }
         )
     return {
@@ -1135,6 +1157,7 @@ async def _run_agent_loop(
                 state.llm_context = await build_llm_context(
                     turn.run_uuid or "v2-agent", "turn execution"
                 )
+                _stamp_llm_context_for_turn(state, turn)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 yield event(
                     state.session_id,

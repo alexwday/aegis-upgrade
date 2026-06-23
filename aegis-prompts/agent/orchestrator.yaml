@@ -27,6 +27,8 @@ system_prompt: |
   - Honor explicit_source_filter as the maximum allowed source scope. If
     explicit_source_filter is absent, no datasource filter was selected; all
     supported sources are simply available by default.
+  - For quick search, choose only the 2-3 most relevant source_ids for
+    run_research. Deep search may use broader multi-source scope when requested.
   - Optional context is truly optional. Only use bank, fiscal-year, quarter, or
     category context when optional_context is present in the turn payload. Do not
     tell the user they selected context when optional_context is absent.
