@@ -102,7 +102,19 @@ type ExpandedApps = Record<DrawerAppKey, boolean>;
 type ChatStreamItem =
   | { type: "message"; message: ChatMessage }
   | { type: "widget"; widget: HtmlWidget }
-  | { type: "thinking"; id: string; prompt: string };
+  | ThinkingItem;
+
+type QuickResearchPhase = "researching" | "creating_brief";
+
+interface ThinkingItem {
+  type: "thinking";
+  id: string;
+  prompt: string;
+  sourceIds?: string[];
+  quickResearch?: {
+    phase: QuickResearchPhase;
+  };
+}
 
 interface SendMessageOptions {
   queryContent?: string;
@@ -252,6 +264,39 @@ function buildOptionalContextPayload(filters: Filters): Partial<Filters> | undef
 
 function withoutThinking(items: ChatStreamItem[]): ChatStreamItem[] {
   return items.filter((item) => item.type !== "thinking");
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.flatMap((item) => (typeof item === "string" && item.trim() ? [item.trim()] : []))
+    : [];
+}
+
+function updateLatestThinkingItem(
+  items: ChatStreamItem[],
+  update: (item: ThinkingItem) => ThinkingItem
+): ChatStreamItem[] {
+  let thinkingIndex = -1;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (items[index].type === "thinking") {
+      thinkingIndex = index;
+      break;
+    }
+  }
+  if (thinkingIndex < 0) return items;
+  return items.map((item, index) => (index === thinkingIndex && item.type === "thinking" ? update(item) : item));
+}
+
+function updateQuickResearchThinking(
+  items: ChatStreamItem[],
+  phase: QuickResearchPhase,
+  sourceIds: string[] = []
+): ChatStreamItem[] {
+  return updateLatestThinkingItem(items, (item) => ({
+    ...item,
+    sourceIds: sourceIds.length ? sourceIds : item.sourceIds,
+    quickResearch: { phase }
+  }));
 }
 
 function parseFinalShellContent(content: string): { content: string; finalShell: FinalResponseShell | null } {
@@ -1065,8 +1110,20 @@ function App() {
       return;
     }
     if (event.type.startsWith("tool.")) {
-      const payload = event.payload as { name?: string };
+      const payload = event.payload as { name?: string; sources?: unknown; source_ids?: unknown };
       setStatus(`${event.type.replace("tool.", "")}: ${payload.name ?? "tool"}`);
+      if (payload.name === "quick_research") {
+        if (event.type === "tool.started") {
+          const eventSourceIds = stringArray(payload.sources);
+          const sourceIds = eventSourceIds.length ? eventSourceIds : stringArray(payload.source_ids);
+          setChatItems((current) => updateQuickResearchThinking(current, "researching", sourceIds));
+          return;
+        }
+        if (event.type === "tool.progress" || event.type === "tool.completed") {
+          setChatItems((current) => updateQuickResearchThinking(current, "creating_brief"));
+          return;
+        }
+      }
       setChatItems((current) => withoutThinking(current));
       return;
     }
@@ -1093,10 +1150,16 @@ function App() {
     if (event.type === "artifact.created" || event.type === "artifact.updated") {
       const payload = event.payload as { artifact?: Artifact };
       if (!payload.artifact) return;
-      setChatItems((current) => withoutThinking(current));
+      const artifact = payload.artifact;
+      const isQuickSearchArtifact = artifact.kind === "quick_search";
+      setChatItems((current) => (
+        isQuickSearchArtifact
+          ? updateQuickResearchThinking(current, "creating_brief")
+          : withoutThinking(current)
+      ));
       setArtifacts((current) => {
-        const others = current.filter((artifact) => artifact.id !== payload.artifact?.id);
-        return [payload.artifact as Artifact, ...others];
+        const others = current.filter((currentArtifact) => currentArtifact.id !== artifact.id);
+        return [artifact, ...others];
       });
     }
   }
@@ -1307,7 +1370,8 @@ function App() {
         {
           type: "thinking",
           id: `thinking-${turnId}`,
-          prompt: content
+          prompt: content,
+          sourceIds: [...activeFilters.source_ids]
         }
       ];
     });
@@ -1473,7 +1537,9 @@ function App() {
               return <WidgetView key={item.widget.id} widget={item.widget} runWidgetAction={runWidgetAction} />;
             }
             if (item.type === "thinking") {
-              return <ThinkingBox key={item.id} />;
+              return item.quickResearch
+                ? <QuickResearchBox key={item.id} item={item} />
+                : <ThinkingBox key={item.id} />;
             }
             const message = item.message;
             return <MessageBubble key={message.id} message={message} />;
@@ -2782,6 +2848,44 @@ function DataAvailabilityChatWidget({
       {response.rows.length > rows.length && (
         <div className="availability-chat-note">Showing first {rows.length} rows in chat.</div>
       )}
+    </article>
+  );
+}
+
+function quickResearchSourceLabel(sourceIds: string[] | undefined): string {
+  const labels = (sourceIds ?? []).map(sourceLabel);
+  return labels.length ? labels.join(", ") : "Selected sources";
+}
+
+function QuickResearchBox({ item }: { item: ThinkingItem }) {
+  const phase = item.quickResearch?.phase ?? "researching";
+  const sourceLabels = quickResearchSourceLabel(item.sourceIds);
+  return (
+    <article className="thinking-box quick-research-box" aria-live="polite" aria-label="Aegis quick research">
+      <div className="thinking-box-header">
+        <Search size={15} />
+        <strong>Searching</strong>
+      </div>
+      <p className="quick-research-status">
+        {phase === "creating_brief" ? (
+          "Creating brief"
+        ) : (
+          <>
+            Researching <span>[{sourceLabels}]</span>
+          </>
+        )}
+      </p>
+      <div className="quick-research-steps" aria-hidden="true">
+        <span className={`quick-research-step ${phase === "researching" ? "active" : "complete"}`}>
+          Researching
+        </span>
+        <span className={`quick-research-step ${phase === "creating_brief" ? "active" : ""}`}>
+          Creating brief
+        </span>
+      </div>
+      <div className="thinking-progress">
+        <span />
+      </div>
     </article>
   );
 }

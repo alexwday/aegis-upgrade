@@ -1803,6 +1803,71 @@ h2 {
   white-space: nowrap;
 }
 
+.quick-research-box {
+  width: min(540px, 78%);
+}
+
+.quick-research-status {
+  overflow-wrap: anywhere;
+}
+
+.quick-research-status span {
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.quick-research-steps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.quick-research-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 25px;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.quick-research-step::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border: 1px solid currentColor;
+  background: #ffffff;
+}
+
+.quick-research-step.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.quick-research-step.active::before {
+  background: var(--accent);
+}
+
+.quick-research-step.complete {
+  border-color: rgba(20, 122, 80, 0.28);
+  background: rgba(20, 122, 80, 0.08);
+  color: var(--ok);
+}
+
+.quick-research-step.complete::before {
+  background: var(--ok);
+}
+
 .thinking-progress {
   position: relative;
   height: 2px;
